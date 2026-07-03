@@ -56,6 +56,8 @@ Run `python3 rnode_pair.py --help` for the full list.
 - `rnode_state.json` — remembers the paired RNode's BLE address between runs
 - `identity` — Reticulum identity file (keep this private; anyone with it can decrypt traffic for it)
 - `contacts.json` — the presence directory of LXMF peers seen announcing on the network (created by `lxmf_messenger.py`)
+- `filetransfer_contacts.json` — the presence directory of file-transfer peers seen announcing on the network (created by `file_transfer.py`)
+- `received_files/` and `received_files.json` — incoming files and the manifest of what was received, when, and from where (created by `file_transfer.py`)
 - `~/.reticulum/config` — gets a `[[RNode BLE Interface]]` block appended (existing interfaces are left untouched); a timestamped backup is made before every edit
 
 ## Messaging (LXMF)
@@ -86,9 +88,27 @@ Each contact records their address, display name (if they set one), and first/la
 
 This is mutual: for two peers to find each other, both need to have announced at some point since either was last online. Use `--announce-interval` if you want that to happen automatically instead of only at startup.
 
+## File transfer
+
+`file_transfer.py` is the same idea as the messenger, but for sending files instead of text. It runs over the same Reticulum setup and can share the same identity, but registers its own destination under a different namespace (`bleconnector.filetransfer` vs LXMF's `lxmf.delivery`) — so it has its own address, its own presence directory, and its own contacts, even though it's the same identity underneath.
+
+```
+source .venv/bin/activate
+python3 file_transfer.py
+```
+
+- **S** — send a file: paste a recipient's address (hex) and a local file path
+- **R** — list received files: shows what's been received, when, from whom, and where it was saved on disk (under `received_files/`)
+- **P** — presence directory: same mechanism as the messenger's, scoped to file-transfer peers; pick one to send a file directly, or press `[A]` to re-announce yourself
+- **Q** — quit
+
+Under the hood this uses `RNS.Link` + `RNS.Resource`, which is Reticulum's built-in mechanism for moving arbitrary data with automatic compression, chunking, and integrity checking — a link is established with the recipient first, then the file streams over it with a live progress percentage. Per RNS's own guidance, Resources aren't recommended for very large files (compression/hashing can outrun the receiver's timeout on slow links); this is intended for the kind of file sizes that make sense over a LoRa-connected RNode, not bulk transfer.
+
+Flags: `--config`, `--identity`, `--display-name`, `--announce-interval` (same meaning as in `lxmf_messenger.py`), `--received-dir` (where incoming files are saved; default `./received_files`), `--manifest <path>` (where the received-files log is kept; default `./received_files.json`), `--contacts <path>` (default `./filetransfer_contacts.json`).
+
 ## Config profiles (`configs/`)
 
-Both `rnode_pair.py` and `lxmf_messenger.py` prompt at startup:
+`rnode_pair.py`, `lxmf_messenger.py`, and `file_transfer.py` all prompt at startup:
 
 ```
 Which Reticulum config do you want to use?

@@ -20,10 +20,8 @@ contact list of who's reachable without needing to be sent their address.
 """
 
 import argparse
-import json
 import queue
 import select
-import subprocess
 import sys
 import termios
 import threading
@@ -36,26 +34,11 @@ import RNS.vendor.umsgpack as msgpack
 import LXMF
 
 from rnode_pair import create_or_load_identity, resolve_config_dir
+from shared import notify_macos, load_json, save_json
 
 DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
 DEFAULT_CONTACTS = str(Path(__file__).parent / "contacts.json")
 LXMF_DELIVERY_ASPECT = "lxmf.delivery"
-
-
-def applescript_escape(text):
-    return text.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def notify_macos(title, subtitle, body):
-    try:
-        script = (
-            f'display notification "{applescript_escape(body[:200])}" '
-            f'with title "{applescript_escape(title)}" '
-            f'subtitle "{applescript_escape(subtitle[:120])}"'
-        )
-        subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        pass
 
 
 def decode_display_name(app_data):
@@ -70,22 +53,6 @@ def decode_display_name(app_data):
         return name_bytes.decode("utf-8") if name_bytes else None
     except Exception:
         return None
-
-
-def load_contacts(path):
-    path = Path(path).expanduser()
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except ValueError:
-        return {}
-
-
-def save_contacts(path, contacts):
-    path = Path(path).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(contacts, indent=2, sort_keys=True) + "\n")
 
 
 class Messenger:
@@ -109,7 +76,7 @@ class Messenger:
         # anywhere on the network, not just people who've messaged us.
         self.aspect_filter = LXMF_DELIVERY_ASPECT
         self.contacts_path = Path(contacts_path).expanduser()
-        self.contacts = load_contacts(self.contacts_path)
+        self.contacts = load_json(self.contacts_path, {})
         self.contacts_lock = threading.Lock()
         self.presence_queue = queue.Queue()
         RNS.Transport.register_announce_handler(self)
@@ -152,7 +119,7 @@ class Messenger:
             entry["last_seen"] = now
             entry.setdefault("first_seen", now)
             self.contacts[address] = entry
-            save_contacts(self.contacts_path, self.contacts)
+            save_json(self.contacts_path, self.contacts)
 
         self.presence_queue.put((address, entry["name"], is_new))
 

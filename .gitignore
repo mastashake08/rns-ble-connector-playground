@@ -5,3 +5,4 @@ identity
 *.json
 configs/default/storage/
 configs/default/interfaces/
+received_files/

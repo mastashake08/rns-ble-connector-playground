@@ -55,6 +55,7 @@ Run `python3 rnode_pair.py --help` for the full list.
 
 - `rnode_state.json` — remembers the paired RNode's BLE address between runs
 - `identity` — Reticulum identity file (keep this private; anyone with it can decrypt traffic for it)
+- `contacts.json` — the presence directory of LXMF peers seen announcing on the network (created by `lxmf_messenger.py`)
 - `~/.reticulum/config` — gets a `[[RNode BLE Interface]]` block appended (existing interfaces are left untouched); a timestamped backup is made before every edit
 
 ## Messaging (LXMF)
@@ -70,11 +71,20 @@ It brings up Reticulum itself (attaching to `rnsd` if it's already running as th
 
 - **M** — compose a message: paste a recipient's LXMF address (hex), optionally a title, and the message body
 - **I** — open the inbox: lists received messages and lets you pick one to reply to
+- **P** — open the presence directory: lists every LXMF peer seen announcing on the network, and lets you pick one to message directly
 - **Q** — quit
 
 Incoming messages trigger a terminal alert (with a bell) and a native macOS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
 
-Flags: `--config`, `--identity` (same meaning as in `rnode_pair.py`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`).
+Flags: `--config`, `--identity` (same meaning as in `rnode_pair.py`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`), `--contacts <path>` (where the presence directory is saved; default `./contacts.json`), `--announce-interval <minutes>` (periodically re-announce yourself so others can discover you; default `0` = announce once at startup only).
+
+### Presence directory
+
+Reticulum destinations are namespaced by an app name plus aspects (e.g. LXMF uses `lxmf.delivery`), and any node in the network can listen for announces under a given namespace without already knowing who's out there. `lxmf_messenger.py` registers a listener for `lxmf.delivery` announces network-wide, so it builds up a contact list of every LXMF peer it's seen — not just people who've messaged you first.
+
+Each contact records their address, display name (if they set one), and first/last seen times, persisted to `contacts.json`. New contacts trigger the same terminal alert as an incoming message. From the **P** screen you can jump straight into composing a message to any saved contact, or trigger `[A]` to re-announce yourself so others can discover you back.
+
+This is mutual: for two peers to find each other, both need to have announced at some point since either was last online. Use `--announce-interval` if you want that to happen automatically instead of only at startup.
 
 ## Config profiles (`configs/`)
 

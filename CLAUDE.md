@@ -2,14 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## When adding new functionality
+
+Each distinct capability in this repo (pairing, messaging, file transfer, git, ...) is its own standalone module/script, not a mode bolted onto an existing one. When asked to add new functionality:
+
+1. Create a new Python module for it (following the existing scripts' shape: reuse `create_or_load_identity`/`resolve_config_dir` from `rnode_pair.py`, reuse `shared.py`'s helpers rather than re-implementing them, verify any new RNS/LXMF API calls against the installed package source or official `Examples/` rather than guessing).
+2. Update `README.md` with a new section for it (what it does, how to run it, its flags, any files it creates).
+3. Update this file (`CLAUDE.md`) if the new module introduces an architectural pattern, a shared convention, or a non-obvious gotcha that future work in this repo should know about — not just a one-line mention.
+
+Don't skip the README/CLAUDE.md updates to the end "if there's time" — do them as part of the same change.
+
 ## What this repo is
 
-Standalone Python scripts (no package/build system) that get a Reticulum ([RNS](https://reticulum.network/)) node running on this Mac with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging and file transfer clients on top:
+Standalone Python scripts (no package/build system) that get a Reticulum ([RNS](https://reticulum.network/)) node running on this Mac with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging, file transfer, and git clients on top:
 
-- `rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by the other two scripts
+- `rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by every other script here
 - `lxmf_messenger.py` — interactive [LXMF](https://github.com/markqvist/LXMF) messaging client
 - `file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `jcomprns.filetransfer` destination namespace instead of LXMF
-- `shared.py` — small helpers (`notify_macos`, `load_json`/`save_json`, `human_size`) used by both interactive clients; not a script, has no `main()`
+- `rns_git.py` — serves git repositories over Reticulum (`serve` subcommand) and provides the connect/relay logic used by the `git-remote-jcomprns` helper, under the `jcomprns.git` destination namespace
+- `git-remote-jcomprns` — thin executable shim (no `.py` extension; this is the literal name git looks for on `PATH` for a `jcomprns://` remote) that hands off to `rns_git.py`'s `remote_helper_main()`
+- `shared.py` — small helpers (`notify_macos`, `load_json`/`save_json`, `human_size`) used by the interactive clients; not a script, has no `main()`
 
 ## Commands
 
@@ -26,17 +38,20 @@ Run the entry points directly:
 python3 rnode_pair.py        # pair a new RNode, or re-run to just update config + launch rnsd
 python3 lxmf_messenger.py    # interactive messaging client (M compose, I inbox, P presence, Q quit)
 python3 file_transfer.py     # interactive file transfer client (S send, R received files, P presence, Q quit)
+python3 rns_git.py serve --repos-dir <dir>   # serve bare git repos over Reticulum
+git clone jcomprns://<hex-address>/<reponame>   # once git-remote-jcomprns is on PATH
 ```
 
 There is no lint config, build step, or automated test suite. Verification is done by:
 - `python3 -m py_compile <file>.py` for a syntax check
 - ad hoc runs against a scratch config directory (pass `--config`/`--identity`/`--contacts`/`--state-file` pointing at a temp dir instead of the real `~/.reticulum` or repo state) with `unittest.mock.patch` used to script `input()` prompts and `serial.tools.list_ports.comports()` — this is necessary because real behavior involves live BLE/USB hardware and an interactive TTY that can't be part of an automated suite
+- for `rns_git.py`, driving `GitServerSession` directly against a real local bare repo and a fake buffer object (`.read`/`.write`/`.flush`/`.close`) that stands in for the RNS `Buffer`, feeding it real pkt-line requests and asserting against real `git-upload-pack`/`git-receive-pack` output — this exercises all of the module's own logic (header parsing, path resolution/security, subprocess piping) without needing a live two-peer RNS link
 
 ## Architecture
 
 ### Config resolution is shared and dual-mode
 
-All three scripts' `main()` call `resolve_config_dir()` (defined in `rnode_pair.py`) before doing anything else. If `--config` isn't passed explicitly, it interactively prompts to choose between the user's live `~/.reticulum` config and any saved profile directory under `configs/<name>/` (detected by `list_saved_configs()` — any subdirectory of `configs/` containing a `config` file). Picking a profile uses that directory as a fully isolated RNS config dir (own `storage/`, own interface state) rather than touching the live one. Passing `--config` explicitly skips the prompt. This same function is imported into `lxmf_messenger.py` and `file_transfer.py` rather than duplicated.
+`rnode_pair.py`, `lxmf_messenger.py`, `file_transfer.py`, and `rns_git.py serve` all call `resolve_config_dir()` (defined in `rnode_pair.py`) before doing anything else. If `--config` isn't passed explicitly, it interactively prompts to choose between the user's live `~/.reticulum` config and any saved profile directory under `configs/<name>/` (detected by `list_saved_configs()` — any subdirectory of `configs/` containing a `config` file). Picking a profile uses that directory as a fully isolated RNS config dir (own `storage/`, own interface state) rather than touching the live one. Passing `--config` explicitly skips the prompt. This same function is imported rather than duplicated. The one exception is the `git-remote-jcomprns` client helper, which git invokes directly with its stdin/stdout already committed to a wire protocol — see the git section below for why it uses env vars instead.
 
 ### Why `rnode_pair.py` talks raw KISS over serial
 
@@ -61,6 +76,16 @@ Display names are decoded from each announce's `app_data`. LXMF encodes it as `m
 ### `file_transfer.py`'s use of Link + Resource
 
 Unlike LXMF (store-and-forward messages to a destination hash), file transfer needs a live `RNS.Link` to the recipient first (`RNS.Link(dest, established_callback=...)`), then an `RNS.Resource(file_handle, link, metadata={"filename": ...}, callback=...)` streamed over it. `RNS.Resource`'s `metadata` param (verified via `RNS/Resource.py`) is how the filename crosses the wire — Resources are otherwise anonymous byte streams with no filename of their own, unlike RNS's own `Examples/Filetransfer.py` which conveys the filename out-of-band via a separate request packet instead. On the receiving side, `link.set_resource_strategy(RNS.Link.ACCEPT_ALL)` auto-accepts incoming resources, and `resource.metadata` / `resource.data.read()` in the concluded callback give back the filename and bytes. Sending polls `resource.get_progress()` against a `threading.Event` set by the completion callback, rather than a fixed sleep loop, so it exits the instant the transfer concludes.
+
+### `rns_git.py`'s use of Link + Buffer (Channel), and the git remote-helper protocol
+
+Unlike file transfer's one-shot `Resource`, git needs a full-duplex, back-and-forth pipe: `channel = link.get_channel()` then `RNS.Buffer.create_bidirectional_buffer(0, 0, channel, ready_callback)` (verified against RNS's own `Examples/Buffer.py`) gives a real Python file-like object over the link. Both ends use stream_id `0` for both directions — stream IDs are scoped per-*receiver*, so this doesn't collide. This is exactly the same trick `ssh` uses for git: give git's own `git-upload-pack`/`git-receive-pack` a bidirectional byte pipe and they speak their existing wire protocol over it unmodified — no git-specific protocol work needed here, only the pipe and (on the client) the minimal `connect`-capability handshake from git's [remote-helper protocol](https://git-scm.com/docs/gitremote-helpers) (`git-remote-jcomprns` → `capabilities` → `connect <service>` → blank-line ack → transparent relay).
+
+Because the RNS server doesn't know which repo/service a connecting client wants until it says so, the client sends a one-line plaintext header (`"<service> <reponame>\n"`) as the *first* bytes over the buffer, before either side starts speaking git's actual protocol — analogous to how the repo path is embedded in the ssh command line rather than git's wire protocol itself. `GitServerSession._on_ready` buffers incoming bytes until it sees that newline, then spawns `git-upload-pack`/`git-receive-pack` against the resolved repo path.
+
+**Gotcha that cost a debugging round when this was written**: piping a subprocess's `stdout` (or `stdin_raw`) with `.read(65536)` looks right but isn't — `io.BufferedReader.read(size)` blocks trying to *fill* the requested size before returning, which stalls interactive back-and-forth protocols like git's (small negotiation packets, not 64KB blobs). Use `.read1(size)` instead, which returns whatever's currently available without waiting to fill the buffer. This was caught by testing `GitServerSession` against a real `git-upload-pack` process and seeing zero bytes come back until this was fixed. Apply the same care (`read1`, or the `ready_callback`-driven pattern RNS's own `Buffer` example uses for the *receiving* side) to any future code that pipes a live/interactive stream — it's a "looks correct, silently stalls" trap, not a crash.
+
+The `git-remote-jcomprns` shim is invoked directly by git with its own stdin/stdout already committed to the remote-helper protocol, so it can't use the interactive `resolve_config_dir()` prompt (there's no room for a human prompt in that stream, and stdin is git's protocol channel, not a keyboard). It reads `JCOMPRNS_CONFIG`/`JCOMPRNS_IDENTITY` env vars instead, defaulting to the live config and shared identity.
 
 ### Known upstream quirks (not bugs in this repo)
 

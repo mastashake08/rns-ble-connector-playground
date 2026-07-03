@@ -106,9 +106,54 @@ Under the hood this uses `RNS.Link` + `RNS.Resource`, which is Reticulum's built
 
 Flags: `--config`, `--identity`, `--display-name`, `--announce-interval` (same meaning as in `lxmf_messenger.py`), `--received-dir` (where incoming files are saved; default `./received_files`), `--manifest <path>` (where the received-files log is kept; default `./received_files.json`), `--contacts <path>` (default `./filetransfer_contacts.json`).
 
+## Git over Reticulum
+
+`rns_git.py` lets you `git clone`/`fetch`/`push` a repository over Reticulum, using completely normal git commands — no different from an `ssh://` remote from git's point of view.
+
+This works the same way `ssh` does for git: git already knows how to speak its own wire protocol over an arbitrary bidirectional byte stream (that's literally what happens over ssh — `ssh host git-upload-pack '/repo'` pipes git's pack protocol over the ssh channel). This module provides that same stream over an RNS `Link` using `RNS.Buffer.create_bidirectional_buffer()`, and spawns the real `git-upload-pack`/`git-receive-pack` binaries on the serving side. Git itself needs no changes; a tiny `git-remote-jcomprns` helper is what makes `git` recognize the `jcomprns://` URL scheme.
+
+### Serving repositories
+
+```
+source .venv/bin/activate
+python3 rns_git.py serve --repos-dir /path/to/repos
+```
+
+`--repos-dir` should contain one or more bare repositories (e.g. `myrepo.git`, created with `git init --bare`). The command prints your address and the exact URL to give clients:
+
+```
+Your jcomprns git address: <hex-address>
+Share this with clients as: git clone jcomprns://<hex-address>/<reponame>
+```
+
+Press Enter to announce again, Ctrl+C to quit. Flags: `--config`, `--identity` (same meaning as elsewhere), `--announce-interval <minutes>`.
+
+### Cloning / fetching / pushing
+
+One-time setup — put `git-remote-jcomprns` somewhere on your `PATH` (e.g. symlink it into `~/.local/bin`):
+
+```
+ln -s "$(pwd)/git-remote-jcomprns" ~/.local/bin/git-remote-jcomprns
+```
+
+After that, git just works:
+
+```
+git clone jcomprns://<hex-address>/<reponame>
+git remote add origin jcomprns://<hex-address>/<reponame>   # for an existing repo
+git fetch
+git push
+```
+
+By default the client uses your live `~/.reticulum` config and the shared `identity` file — since git invokes the helper directly with its own stdin/stdout already committed to the wire protocol, there's no interactive config-picker prompt here (unlike the other scripts). Override with the `JCOMPRNS_CONFIG` and `JCOMPRNS_IDENTITY` environment variables if you need a specific config profile or identity. Having `rnsd` already running in the background (via `rnode_pair.py`) is recommended if you'll be doing git operations repeatedly, so each one doesn't have to bring up interfaces from scratch.
+
+### Security notes
+
+The server only serves directories that already exist directly under `--repos-dir`; requests for repo names containing `..` or resolving outside that directory are rejected. There's no authentication beyond Reticulum's own identity/encryption — anyone with the server's address can attempt `upload-pack` (read) and `receive-pack` (push) against any repo you're serving. Don't serve anything you wouldn't hand out to anyone who obtains the address.
+
 ## Config profiles (`configs/`)
 
-`rnode_pair.py`, `lxmf_messenger.py`, and `file_transfer.py` all prompt at startup:
+`rnode_pair.py`, `lxmf_messenger.py`, `file_transfer.py`, and `rns_git.py serve` all prompt at startup (the `git-remote-jcomprns` client helper does not — see above):
 
 ```
 Which Reticulum config do you want to use?

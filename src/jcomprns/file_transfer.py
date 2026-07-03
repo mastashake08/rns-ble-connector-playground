@@ -39,13 +39,12 @@ from pathlib import Path
 import RNS
 import RNS.vendor.umsgpack as msgpack
 
-from rnode_pair import create_or_load_identity, resolve_config_dir
-from shared import notify, load_json, save_json, human_size
-
-DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
-DEFAULT_CONTACTS = str(Path(__file__).parent / "filetransfer_contacts.json")
-DEFAULT_RECEIVED_DIR = str(Path(__file__).parent / "received_files")
-DEFAULT_MANIFEST = str(Path(__file__).parent / "received_files.json")
+from .rnode_pair import create_or_load_identity, resolve_config_dir
+from .shared import (
+    notify, load_json, save_json, human_size, debug, set_verbose,
+    DEFAULT_IDENTITY, DEFAULT_FILETRANSFER_CONTACTS as DEFAULT_CONTACTS,
+    DEFAULT_RECEIVED_DIR, DEFAULT_MANIFEST,
+)
 
 APP_NAME = "jcomprns"
 ASPECT = "filetransfer"
@@ -64,15 +63,16 @@ def decode_peer_name(app_data):
         unpacked = msgpack.unpackb(app_data)
         name_bytes = unpacked[0] if isinstance(unpacked, list) and unpacked else None
         return name_bytes.decode("utf-8") if name_bytes else None
-    except Exception:
+    except Exception as e:
+        debug(f"decode_peer_name() couldn't parse announce app_data: {e}")
         return None
 
 
 class FileTransferNode:
     def __init__(self, config_dir, identity_path, display_name,
                  received_dir=DEFAULT_RECEIVED_DIR, manifest_path=DEFAULT_MANIFEST,
-                 contacts_path=DEFAULT_CONTACTS, announce_interval=0):
-        self.reticulum = RNS.Reticulum(str(Path(config_dir).expanduser()))
+                 contacts_path=DEFAULT_CONTACTS, announce_interval=0, verbose=False):
+        self.reticulum = RNS.Reticulum(str(Path(config_dir).expanduser()), loglevel=RNS.LOG_DEBUG if verbose else None)
         self.identity = create_or_load_identity(identity_path)
         self.display_name = display_name
 
@@ -361,6 +361,8 @@ def run_keyboard_loop(node):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-v", "--verbose", action="store_true",
+                         help="Show diagnostic detail for errors that are normally handled silently, and run RNS at debug log level")
     parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
     parser.add_argument("--identity", default=DEFAULT_IDENTITY, help="Path to the RNS identity file to create/reuse")
     parser.add_argument("--display-name", default="ble-connector", help="Display name announced with your file-transfer address")
@@ -370,11 +372,12 @@ def main():
     parser.add_argument("--announce-interval", type=float, default=0,
                          help="Re-announce yourself every N minutes so others can discover you (0 = only announce once at startup)")
     args = parser.parse_args()
+    set_verbose(args.verbose)
     args.config = resolve_config_dir(args.config)
 
     node = FileTransferNode(args.config, args.identity, args.display_name,
                              received_dir=args.received_dir, manifest_path=args.manifest,
-                             contacts_path=args.contacts, announce_interval=args.announce_interval)
+                             contacts_path=args.contacts, announce_interval=args.announce_interval, verbose=args.verbose)
 
     try:
         run_keyboard_loop(node)

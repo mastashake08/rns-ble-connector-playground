@@ -41,6 +41,8 @@ from pathlib import Path
 import serial
 from serial.tools import list_ports
 
+from .shared import app_data_dir, DEFAULT_IDENTITY, DEFAULT_STATE_FILE, CONFIGS_DIR, debug, set_verbose
+
 FEND = 0xC0
 FESC = 0xDB
 TFEND = 0xDC
@@ -60,7 +62,6 @@ RNODE_PORT_HINTS = (
 )
 
 LIVE_CONFIG_DIR = "~/.reticulum"
-CONFIGS_DIR = Path(__file__).parent / "configs"
 
 
 def list_saved_configs(configs_dir=CONFIGS_DIR):
@@ -72,11 +73,12 @@ def list_saved_configs(configs_dir=CONFIGS_DIR):
 
 def resolve_config_dir(explicit_config, configs_dir=CONFIGS_DIR):
     """Return the RNS config directory to use, prompting the user to pick
-    between their live config and a saved one under configs/ if --config
+    between their live config and a saved one under configs_dir if --config
     wasn't given explicitly."""
     if explicit_config:
         return explicit_config
 
+    configs_dir = Path(configs_dir)
     profiles = list_saved_configs(configs_dir)
     if not profiles:
         return LIVE_CONFIG_DIR
@@ -84,7 +86,7 @@ def resolve_config_dir(explicit_config, configs_dir=CONFIGS_DIR):
     print("Which Reticulum config do you want to use?")
     print(f"  [0] Your live config ({LIVE_CONFIG_DIR})")
     for i, name in enumerate(profiles, start=1):
-        print(f"  [{i}] {name}  (configs/{name})")
+        print(f"  [{i}] {name}  ({configs_dir / name})")
 
     choice = input("Choice [0]: ").strip()
     if choice and choice.isdigit() and 1 <= int(choice) <= len(profiles):
@@ -194,8 +196,8 @@ def open_bluetooth_settings():
                     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     return
             print(f"Couldn't detect a Bluetooth settings app to open automatically -- open {bluetooth_settings_label()} manually.")
-    except (OSError, subprocess.SubprocessError):
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        debug(f"open_bluetooth_settings() failed: {e}")
 
 
 def _extract_mac_address(text):
@@ -229,12 +231,14 @@ def _find_bonded_rnode_address_macos():
             text=True,
             timeout=15,
         ).stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        debug(f"system_profiler lookup failed: {e}")
         return None
 
     try:
         data = json.loads(out)
-    except ValueError:
+    except ValueError as e:
+        debug(f"system_profiler output wasn't valid JSON: {e}")
         return None
 
     def walk(node):
@@ -269,7 +273,8 @@ def _find_bonded_rnode_address_windows():
              "| Select-Object -ExpandProperty InstanceId"],
             check=True, capture_output=True, text=True, timeout=15,
         ).stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        debug(f"Get-PnpDevice lookup failed: {e}")
         return None
 
     for line in out.splitlines():
@@ -286,7 +291,8 @@ def _find_bonded_rnode_address_linux():
             ["bluetoothctl", "devices", "Paired"],
             check=True, capture_output=True, text=True, timeout=15,
         ).stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        debug(f"bluetoothctl lookup failed: {e}")
         return None
 
     for line in out.splitlines():
@@ -436,7 +442,8 @@ def load_state(state_path):
         return None
     try:
         return json.loads(state_path.read_text())
-    except ValueError:
+    except ValueError as e:
+        debug(f"load_state({state_path}) failed to parse: {e}")
         return None
 
 
@@ -460,24 +467,29 @@ def rns_tool_path(name):
     sys.exit(1)
 
 
-def launch_rnsd(config_path):
+def launch_rnsd(config_path, verbose=False):
     rnsd_path = rns_tool_path("rnsd")
     print()
     print(f"Launching rnsd (config: {config_path})... Ctrl+C to stop.")
-    os.execv(rnsd_path, [rnsd_path, "--config", str(Path(config_path).expanduser())])
+    argv = [rnsd_path, "--config", str(Path(config_path).expanduser())]
+    if verbose:
+        argv.append("-v")
+    os.execv(rnsd_path, argv)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-v", "--verbose", action="store_true",
+                         help="Show diagnostic detail for errors that are normally handled silently, and run rnsd verbosely")
     parser.add_argument("--port", help="RNode USB serial port (auto-detected if omitted)")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--pin-timeout", type=float, default=20.0, help="Seconds to wait for the RNode to report its pairing PIN")
     parser.add_argument("--skip-pair", action="store_true", help="Skip the USB pairing flow (RNode is already bonded)")
     parser.add_argument("--repair", action="store_true", help="Ignore any saved pairing and run the USB pairing flow again")
     parser.add_argument("--address", help="RNode BLE MAC address, e.g. aa:bb:cc:dd:ee:ff (skips auto-detection)")
-    parser.add_argument("--state-file", default=str(Path(__file__).parent / "rnode_state.json"), help="Where to remember the paired RNode's address")
+    parser.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="Where to remember the paired RNode's address")
     parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
-    parser.add_argument("--identity", default=str(Path(__file__).parent / "identity"), help="Path to the RNS identity file to create/reuse")
+    parser.add_argument("--identity", default=DEFAULT_IDENTITY, help="Path to the RNS identity file to create/reuse")
     parser.add_argument("--frequency", type=int, default=915000000, help="LoRa frequency in Hz")
     parser.add_argument("--bandwidth", type=int, default=125000, help="LoRa bandwidth in Hz")
     parser.add_argument("--txpower", type=int, default=17, help="LoRa TX power in dBm")
@@ -485,6 +497,7 @@ def main():
     parser.add_argument("--codingrate", type=int, default=5, help="LoRa coding rate")
     parser.add_argument("--no-run", action="store_true", help="Update config/identity but don't launch rnsd")
     args = parser.parse_args()
+    set_verbose(args.verbose)
     args.config = resolve_config_dir(args.config)
 
     address = args.address
@@ -512,7 +525,7 @@ def main():
         print("\n--no-run set, not launching rnsd.")
         return
 
-    launch_rnsd(args.config)
+    launch_rnsd(args.config, verbose=args.verbose)
 
 
 if __name__ == "__main__":

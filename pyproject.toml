@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jcomprns"
+version = "0.1.0"
+description = "Pair an RNode over Bluetooth LE and run LXMF messaging, file transfer, and git over Reticulum (RNS)."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Communications",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "rns>=1.3.5",
+    "lxmf",
+    "bleak",
+    "pyserial",
+]
+
+[project.scripts]
+jcomprns-pair = "jcomprns.rnode_pair:main"
+jcomprns-chat = "jcomprns.lxmf_messenger:main"
+jcomprns-send = "jcomprns.file_transfer:main"
+jcomprns-git = "jcomprns.rns_git:main"
+git-remote-jcomprns = "jcomprns.rns_git:remote_helper_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

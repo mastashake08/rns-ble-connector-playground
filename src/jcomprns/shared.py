@@ -1,10 +1,52 @@
-"""Small helpers shared between the interactive RNS apps in this repo."""
+"""Small helpers shared between the interactive RNS apps in this package."""
 
 import json
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+_verbose = False
+
+
+def set_verbose(enabled):
+    global _verbose
+    _verbose = enabled
+
+
+def is_verbose():
+    return _verbose
+
+
+def debug(message):
+    """Print a diagnostic message only when --verbose is enabled. Call this
+    at points where an error is otherwise handled silently by design (a
+    best-effort OS notification failing, a corrupt JSON file falling back
+    to a default, garbage network data being ignored, ...) so the detail
+    isn't lost when troubleshooting, but doesn't clutter normal runs."""
+    if _verbose:
+        print(f"[debug] {message}", file=sys.stderr)
+
+
+def app_data_dir():
+    """Where this app's runtime state lives: identity, remembered pairing
+    state, presence directories, received files, and saved config profiles.
+    Independent of where the package itself is installed (pip may put that
+    anywhere, including a read-only location), same idea as RNS's own
+    ~/.reticulum."""
+    path = Path.home() / ".jcomprns"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+DEFAULT_IDENTITY = str(app_data_dir() / "identity")
+DEFAULT_STATE_FILE = str(app_data_dir() / "rnode_state.json")
+DEFAULT_CONTACTS = str(app_data_dir() / "contacts.json")
+DEFAULT_FILETRANSFER_CONTACTS = str(app_data_dir() / "filetransfer_contacts.json")
+DEFAULT_RECEIVED_DIR = str(app_data_dir() / "received_files")
+DEFAULT_MANIFEST = str(app_data_dir() / "received_files.json")
+CONFIGS_DIR = app_data_dir() / "configs"
 
 
 def applescript_escape(text):
@@ -24,8 +66,10 @@ def notify(title, subtitle, body):
             _notify_windows(title, subtitle, body)
         elif system == "Linux":
             _notify_linux(title, subtitle, body)
-    except (OSError, subprocess.SubprocessError):
-        pass
+        else:
+            debug(f"notify(): no notifier for platform {system!r}")
+    except (OSError, subprocess.SubprocessError) as e:
+        debug(f"notify() failed: {e}")
 
 
 def _notify_macos(title, subtitle, body):
@@ -39,6 +83,7 @@ def _notify_macos(title, subtitle, body):
 
 def _notify_linux(title, subtitle, body):
     if not shutil.which("notify-send"):
+        debug("notify(): notify-send not found on PATH")
         return
     message = f"{subtitle}\n{body}" if subtitle else body
     subprocess.run(["notify-send", title, message], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
@@ -46,6 +91,7 @@ def _notify_linux(title, subtitle, body):
 
 def _notify_windows(title, subtitle, body):
     if not shutil.which("powershell"):
+        debug("notify(): powershell not found on PATH")
         return
     message = f"{subtitle}\n{body}" if subtitle else body
     # Uses the WinRT toast APIs directly, so it works on stock Windows 10/11
@@ -77,7 +123,8 @@ def load_json(path, default):
         return default
     try:
         return json.loads(path.read_text())
-    except ValueError:
+    except ValueError as e:
+        debug(f"load_json({path}) failed to parse, using default: {e}")
         return default
 
 

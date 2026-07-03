@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
-Pairs an RNode to this Mac over Bluetooth LE, then wires it into RNS.
+Pairs an RNode to this machine over Bluetooth LE, then wires it into RNS.
 
 RNode's BLE stack requires a bonded (secure) connection before RNS can talk
-to it, and that bond can only be created through macOS's own Bluetooth
+to it, and that bond can only be created through the OS's own Bluetooth
 pairing UI -- no third-party app can drive that dialog. What this script
 automates is everything around that: talk to the RNode over its USB serial
 port (via the same KISS commands rnodeconf uses) to switch on Bluetooth and
 put it into pairing mode, read back the pairing PIN the firmware generates,
-walk you through completing the bond in System Settings, then add a
-`ble://<address>` RNodeInterface to your Reticulum config, create a
+walk you through completing the bond in your OS's Bluetooth settings, then
+add a `ble://<address>` RNodeInterface to your Reticulum config, create a
 Reticulum identity if you don't already have one, and launch rnsd.
+
+Works on macOS, Windows, and Linux. The USB/KISS pairing trigger and the
+RNS/config plumbing are identical on all three (pyserial handles port
+enumeration cross-platform); only detecting the bonded BLE address and
+opening Bluetooth settings differ per OS -- see bluetooth_settings_label()
+and find_bonded_rnode_address() below. macOS is the primary tested
+platform; the Windows (PowerShell/Get-PnpDevice) and Linux (bluetoothctl)
+paths are implemented against each OS's standard tooling but not verified
+on real hardware.
 
 Once paired, the RNode's address is remembered in rnode_state.json, so later
 runs skip straight to config + launch. Pass --repair to pair a different
@@ -21,6 +30,8 @@ import argparse
 import datetime
 import json
 import os
+import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -42,7 +53,46 @@ BT_CTRL_DISABLE = 0x00
 BT_CTRL_ENABLE = 0x01
 BT_CTRL_PAIR = 0x02
 
-RNODE_PORT_HINTS = ("usbserial", "usbmodem", "SLAB", "CP210", "CH340", "CH9102", "wchusbserial")
+RNODE_PORT_HINTS = (
+    "usbserial", "usbmodem", "wchusbserial",  # macOS device node names
+    "ttyUSB", "ttyACM",  # Linux device node names
+    "SLAB", "CP210", "CH340", "CH9102",  # USB-serial chip names, appear in the description on any OS
+)
+
+LIVE_CONFIG_DIR = "~/.reticulum"
+CONFIGS_DIR = Path(__file__).parent / "configs"
+
+
+def list_saved_configs(configs_dir=CONFIGS_DIR):
+    configs_dir = Path(configs_dir)
+    if not configs_dir.exists():
+        return []
+    return sorted(p.name for p in configs_dir.iterdir() if p.is_dir() and (p / "config").exists())
+
+
+def resolve_config_dir(explicit_config, configs_dir=CONFIGS_DIR):
+    """Return the RNS config directory to use, prompting the user to pick
+    between their live config and a saved one under configs/ if --config
+    wasn't given explicitly."""
+    if explicit_config:
+        return explicit_config
+
+    profiles = list_saved_configs(configs_dir)
+    if not profiles:
+        return LIVE_CONFIG_DIR
+
+    print("Which Reticulum config do you want to use?")
+    print(f"  [0] Your live config ({LIVE_CONFIG_DIR})")
+    for i, name in enumerate(profiles, start=1):
+        print(f"  [{i}] {name}  (configs/{name})")
+
+    choice = input("Choice [0]: ").strip()
+    if choice and choice.isdigit() and 1 <= int(choice) <= len(profiles):
+        return str(configs_dir / profiles[int(choice) - 1])
+
+    if choice and choice != "0":
+        print("Invalid choice, using your live config.")
+    return LIVE_CONFIG_DIR
 
 
 def find_rnode_port():
@@ -117,19 +167,60 @@ def read_bt_pin(ser, timeout_s):
     return None
 
 
+def bluetooth_settings_label():
+    system = platform.system()
+    if system == "Darwin":
+        return "System Settings > Bluetooth"
+    if system == "Windows":
+        return "Settings > Bluetooth & devices"
+    if system == "Linux":
+        return "your desktop's Bluetooth settings"
+    return "your system's Bluetooth settings"
+
+
 def open_bluetooth_settings():
+    system = platform.system()
     try:
-        subprocess.run(
-            ["open", "x-apple.systempreferences:com.apple.preference.bluetooth"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
+        if system == "Darwin":
+            subprocess.run(
+                ["open", "x-apple.systempreferences:com.apple.preference.bluetooth"],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            )
+        elif system == "Windows":
+            os.startfile("ms-settings:bluetooth")
+        elif system == "Linux":
+            for cmd in (["gnome-control-center", "bluetooth"], ["blueman-manager"], ["kcmshell5", "kcm_bluetooth"]):
+                if shutil.which(cmd[0]):
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+            print(f"Couldn't detect a Bluetooth settings app to open automatically -- open {bluetooth_settings_label()} manually.")
+    except (OSError, subprocess.SubprocessError):
         pass
 
 
+def _extract_mac_address(text):
+    match = re.search(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}", text)
+    if match:
+        return match.group(0).replace("-", ":").lower()
+    match = re.search(r"\bDEV_([0-9A-Fa-f]{12})\b", text)
+    if match:
+        hexstr = match.group(1)
+        return ":".join(hexstr[i:i + 2] for i in range(0, 12, 2)).lower()
+    return None
+
+
 def find_bonded_rnode_address():
+    system = platform.system()
+    if system == "Darwin":
+        return _find_bonded_rnode_address_macos()
+    if system == "Windows":
+        return _find_bonded_rnode_address_windows()
+    if system == "Linux":
+        return _find_bonded_rnode_address_linux()
+    return None
+
+
+def _find_bonded_rnode_address_macos():
     try:
         out = subprocess.run(
             ["system_profiler", "SPBluetoothDataType", "-json"],
@@ -166,6 +257,45 @@ def find_bonded_rnode_address():
     return walk(data)
 
 
+def _find_bonded_rnode_address_windows():
+    # Windows has no simple built-in CLI equivalent of system_profiler; this
+    # queries paired Bluetooth PnP devices via PowerShell and extracts the
+    # MAC address embedded in the device instance ID (e.g.
+    # BTHLE\DEV_AABBCCDDEEFF\...).
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-PnpDevice -Class Bluetooth | Where-Object { $_.FriendlyName -like 'RNode*' } "
+             "| Select-Object -ExpandProperty InstanceId"],
+            check=True, capture_output=True, text=True, timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    for line in out.splitlines():
+        address = _extract_mac_address(line)
+        if address:
+            return address
+    return None
+
+
+def _find_bonded_rnode_address_linux():
+    # Relies on BlueZ's bluetoothctl, the standard Linux Bluetooth stack CLI.
+    try:
+        out = subprocess.run(
+            ["bluetoothctl", "devices", "Paired"],
+            check=True, capture_output=True, text=True, timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    for line in out.splitlines():
+        parts = line.strip().split(" ", 2)
+        if len(parts) >= 3 and parts[0] == "Device" and "rnode" in parts[2].lower():
+            return parts[1].lower()
+    return None
+
+
 def pair_rnode(args):
     port = args.port or find_rnode_port()
     if not port:
@@ -197,20 +327,21 @@ def pair_rnode(args):
         print(f"Pairing PIN: {pin:06d}")
     else:
         print("The RNode didn't report a PIN over serial in time (some units show it on an onboard display instead).")
-        print("You can still proceed -- macOS will show whatever PIN the device presents during pairing.")
+        print("You can still proceed -- your OS will show whatever PIN the device presents during pairing.")
 
+    settings_label = bluetooth_settings_label()
     print()
-    print("Now finish pairing on the Mac:")
-    print("  1. Opening System Settings > Bluetooth...")
+    print("Now finish pairing:")
+    print(f"  1. Opening {settings_label}...")
     open_bluetooth_settings()
-    print("  2. Find the device named 'RNode XXXX' under nearby devices and click Connect.")
+    print("  2. Find the device named 'RNode XXXX' under nearby devices and connect/pair with it.")
     if pin is not None:
-        print(f"  3. When macOS prompts for a passkey, enter: {pin:06d}")
+        print(f"  3. When prompted for a passkey, enter: {pin:06d}")
     else:
-        print("  3. When macOS prompts for a passkey, enter the PIN the RNode displays.")
+        print("  3. When prompted for a passkey, enter the PIN the RNode displays.")
     print("  4. Confirm the pairing on both sides if prompted.")
     print()
-    input("Press Enter once pairing is complete in System Settings...")
+    input("Press Enter once pairing is complete...")
 
     address = find_bonded_rnode_address()
     print()
@@ -218,8 +349,14 @@ def pair_rnode(args):
         print(f"Paired. RNode BLE address: {address}")
     else:
         print("Couldn't auto-detect the RNode's Bluetooth address.")
-        print("Look it up via the (i) button next to the device in System Settings > Bluetooth,")
-        print("or run: system_profiler SPBluetoothDataType")
+        print(f"Look it up in {settings_label},")
+        system = platform.system()
+        if system == "Darwin":
+            print("or run: system_profiler SPBluetoothDataType")
+        elif system == "Windows":
+            print("or run: Get-PnpDevice -Class Bluetooth")
+        elif system == "Linux":
+            print("or run: bluetoothctl devices Paired")
     return address
 
 
@@ -339,7 +476,7 @@ def main():
     parser.add_argument("--repair", action="store_true", help="Ignore any saved pairing and run the USB pairing flow again")
     parser.add_argument("--address", help="RNode BLE MAC address, e.g. aa:bb:cc:dd:ee:ff (skips auto-detection)")
     parser.add_argument("--state-file", default=str(Path(__file__).parent / "rnode_state.json"), help="Where to remember the paired RNode's address")
-    parser.add_argument("--config", default="~/.reticulum", help="Path to the RNS config directory")
+    parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
     parser.add_argument("--identity", default=str(Path(__file__).parent / "identity"), help="Path to the RNS identity file to create/reuse")
     parser.add_argument("--frequency", type=int, default=915000000, help="LoRa frequency in Hz")
     parser.add_argument("--bandwidth", type=int, default=125000, help="LoRa bandwidth in Hz")
@@ -348,6 +485,7 @@ def main():
     parser.add_argument("--codingrate", type=int, default=5, help="LoRa coding rate")
     parser.add_argument("--no-run", action="store_true", help="Update config/identity but don't launch rnsd")
     args = parser.parse_args()
+    args.config = resolve_config_dir(args.config)
 
     address = args.address
     if not address and not args.repair:

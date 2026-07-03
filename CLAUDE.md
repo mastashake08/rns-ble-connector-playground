@@ -8,7 +8,7 @@ Standalone Python scripts (no package/build system) that get a Reticulum ([RNS](
 
 - `rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by the other two scripts
 - `lxmf_messenger.py` — interactive [LXMF](https://github.com/markqvist/LXMF) messaging client
-- `file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `bleconnector.filetransfer` destination namespace instead of LXMF
+- `file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `jcomprns.filetransfer` destination namespace instead of LXMF
 - `shared.py` — small helpers (`notify_macos`, `load_json`/`save_json`, `human_size`) used by both interactive clients; not a script, has no `main()`
 
 ## Commands
@@ -54,7 +54,7 @@ The keyboard UI itself (`run_keyboard_loop`) uses `tty.setcbreak` + `select.sele
 
 ### Presence directory (same pattern in both apps)
 
-Both `Messenger` and `FileTransferNode` register themselves as an `RNS.Transport` announce handler with `aspect_filter` set to their own app's namespace (`"lxmf.delivery"` for messaging, `"bleconnector.filetransfer"` for file transfer), so each hears *any* peer's announce under that namespace on the network, not just peers who've contacted them first. This is the general mechanism for building any custom app/domain on Reticulum: a destination's discoverability comes from its `app_name`/aspect namespace, and any node can listen for announces under a namespace it doesn't otherwise participate in — the two apps' directories are independent because they're different namespaces, even when it's the same identity underneath.
+Both `Messenger` and `FileTransferNode` register themselves as an `RNS.Transport` announce handler with `aspect_filter` set to their own app's namespace (`"lxmf.delivery"` for messaging, `"jcomprns.filetransfer"` for file transfer), so each hears *any* peer's announce under that namespace on the network, not just peers who've contacted them first. This is the general mechanism for building any custom app/domain on Reticulum: a destination's discoverability comes from its `app_name`/aspect namespace, and any node can listen for announces under a namespace it doesn't otherwise participate in — the two apps' directories are independent because they're different namespaces, even when it's the same identity underneath.
 
 Display names are decoded from each announce's `app_data`. LXMF encodes it as `msgpack([display_name_bytes_or_None, stamp_cost, supported_functionality])` (matched against `LXMRouter.get_announce_app_data` in the installed `lxmf` package); `file_transfer.py` defines its own minimal `msgpack([display_name_bytes_or_None])` since it's a custom namespace with no existing encoding to match. Both decoders are wrapped in a broad `except Exception` since `app_data` is attacker-controlled network input. Results persist to `contacts.json` / `filetransfer_contacts.json` respectively.
 

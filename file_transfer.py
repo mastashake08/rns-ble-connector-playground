@@ -5,7 +5,7 @@ rnode_pair.py.
 
 Runs Reticulum in-process (attaching to the shared instance if rnsd is
 already running, or bringing up the configured interfaces itself if not),
-registers a "bleconnector.filetransfer" destination for your identity, and
+registers a "jcomprns.filetransfer" destination for your identity, and
 gives you a tiny keyboard-driven UI:
 
   [S] Send a file to a pasted address
@@ -15,7 +15,7 @@ gives you a tiny keyboard-driven UI:
 
 Files are sent over an RNS Link using RNS.Resource, which handles chunking,
 compression and integrity checking for you. This is a different destination
-namespace from lxmf_messenger.py ("bleconnector.filetransfer" vs
+namespace from lxmf_messenger.py ("jcomprns.filetransfer" vs
 "lxmf.delivery"), so it has its own address, contacts, and announces --
 even though it can share the same identity file.
 
@@ -47,7 +47,7 @@ DEFAULT_CONTACTS = str(Path(__file__).parent / "filetransfer_contacts.json")
 DEFAULT_RECEIVED_DIR = str(Path(__file__).parent / "received_files")
 DEFAULT_MANIFEST = str(Path(__file__).parent / "received_files.json")
 
-APP_NAME = "bleconnector"
+APP_NAME = "jcomprns"
 ASPECT = "filetransfer"
 ASPECT_FILTER = f"{APP_NAME}.{ASPECT}"
 

@@ -90,7 +90,7 @@ This is mutual: for two peers to find each other, both need to have announced at
 
 ## File transfer
 
-`file_transfer.py` is the same idea as the messenger, but for sending files instead of text. It runs over the same Reticulum setup and can share the same identity, but registers its own destination under a different namespace (`bleconnector.filetransfer` vs LXMF's `lxmf.delivery`) — so it has its own address, its own presence directory, and its own contacts, even though it's the same identity underneath.
+`file_transfer.py` is the same idea as the messenger, but for sending files instead of text. It runs over the same Reticulum setup and can share the same identity, but registers its own destination under a different namespace (`jcomprns.filetransfer` vs LXMF's `lxmf.delivery`) — so it has its own address, its own presence directory, and its own contacts, even though it's the same identity underneath.
 
 ```
 source .venv/bin/activate

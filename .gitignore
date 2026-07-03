@@ -2,6 +2,6 @@
 .vscode/
 __pycache__/
 identity
-identity.json
+*.json
 configs/default/storage/
 configs/default/interfaces/

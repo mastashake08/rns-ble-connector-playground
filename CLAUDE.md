@@ -14,14 +14,14 @@ Don't skip the README/CLAUDE.md updates to the end "if there's time" — do them
 
 ## What this repo is
 
-Standalone Python scripts (no package/build system) that get a Reticulum ([RNS](https://reticulum.network/)) node running on this Mac with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging, file transfer, and git clients on top:
+Standalone Python scripts (no package/build system, cross-platform: macOS/Windows/Linux — see "Cross-platform OS integration" below) that get a Reticulum ([RNS](https://reticulum.network/)) node running with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging, file transfer, and git clients on top:
 
 - `rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by every other script here
 - `lxmf_messenger.py` — interactive [LXMF](https://github.com/markqvist/LXMF) messaging client
 - `file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `jcomprns.filetransfer` destination namespace instead of LXMF
 - `rns_git.py` — serves git repositories over Reticulum (`serve` subcommand) and provides the connect/relay logic used by the `git-remote-jcomprns` helper, under the `jcomprns.git` destination namespace
 - `git-remote-jcomprns` — thin executable shim (no `.py` extension; this is the literal name git looks for on `PATH` for a `jcomprns://` remote) that hands off to `rns_git.py`'s `remote_helper_main()`
-- `shared.py` — small helpers (`notify_macos`, `load_json`/`save_json`, `human_size`) used by the interactive clients; not a script, has no `main()`
+- `shared.py` — small helpers (`notify`, `load_json`/`save_json`, `human_size`) used by the interactive clients; not a script, has no `main()`
 
 ## Commands
 
@@ -55,7 +55,7 @@ There is no lint config, build step, or automated test suite. Verification is do
 
 ### Why `rnode_pair.py` talks raw KISS over serial
 
-RNode's BLE stack requires OS-level Bluetooth bonding before any data can flow, and macOS only exposes that pairing dialog through System Settings — no library can drive it programmatically. What *can* be automated is talking to the RNode over USB serial using the same KISS commands `rnodeconf` uses (`CMD_BT_CTRL` to enable Bluetooth / enter pairing mode, `CMD_BT_PIN` to read back the generated pairing PIN), then walking the user through completing the bond manually. The KISS framing constants (`FEND`/`FESC`/`TFEND`/`TFESC`) and command bytes are hand-rolled in this file, verified against RNS's own `rnodeconf.py` source rather than guessed.
+RNode's BLE stack requires OS-level Bluetooth bonding before any data can flow, and every OS only exposes that pairing dialog through its own native Bluetooth settings UI — no library can drive it programmatically, on any platform. What *can* be automated is talking to the RNode over USB serial using the same KISS commands `rnodeconf` uses (`CMD_BT_CTRL` to enable Bluetooth / enter pairing mode, `CMD_BT_PIN` to read back the generated pairing PIN), then walking the user through completing the bond manually. The KISS framing constants (`FEND`/`FESC`/`TFEND`/`TFESC`) and command bytes are hand-rolled in this file, verified against RNS's own `rnodeconf.py` source rather than guessed.
 
 Once bonded, the BLE MAC address is remembered in `rnode_state.json` so later runs skip straight to updating the config and launching `rnsd` — no USB reconnection needed. `pair_rnode()` and serial open failures are non-fatal by design: if no device/port is found, the script logs it and continues on to config + identity + launch rather than exiting, since the user may only want to (re)launch against an already-paired device or an already-correct config.
 
@@ -63,7 +63,7 @@ Once bonded, the BLE MAC address is remembered in `rnode_state.json` so later ru
 
 ### Threading model shared by both interactive clients
 
-RNS/LXMF deliver messages, announces, and (for `file_transfer.py`) link/resource events from their own background transport thread, not the main thread. Callbacks registered with RNS/LXMF (`Messenger._on_message`, `Messenger.received_announce`, `FileTransferNode._on_incoming_link`, `_on_resource_started`, `_on_resource_concluded`, both classes' `received_announce`) all just push onto a `queue.Queue` and return immediately; the main thread's `drain_notifications()` — polled once per keyboard-loop tick — is what actually prints alerts and fires macOS notifications. Any new code that reacts to incoming network events should follow this queue-and-drain pattern rather than doing work directly in the callback.
+RNS/LXMF deliver messages, announces, and (for `file_transfer.py`) link/resource events from their own background transport thread, not the main thread. Callbacks registered with RNS/LXMF (`Messenger._on_message`, `Messenger.received_announce`, `FileTransferNode._on_incoming_link`, `_on_resource_started`, `_on_resource_concluded`, both classes' `received_announce`) all just push onto a `queue.Queue` and return immediately; the main thread's `drain_notifications()` — polled once per keyboard-loop tick — is what actually prints alerts and fires native OS notifications via `shared.notify()`. Any new code that reacts to incoming network events should follow this queue-and-drain pattern rather than doing work directly in the callback.
 
 The keyboard UI itself (`run_keyboard_loop`) uses `tty.setcbreak` + `select.select` on stdin to read single keypresses without waiting for Enter, temporarily restoring normal terminal mode (`termios.tcsetattr`) around any sub-flow that needs real `input()` (compose/send, inbox, presence).
 
@@ -86,6 +86,14 @@ Because the RNS server doesn't know which repo/service a connecting client wants
 **Gotcha that cost a debugging round when this was written**: piping a subprocess's `stdout` (or `stdin_raw`) with `.read(65536)` looks right but isn't — `io.BufferedReader.read(size)` blocks trying to *fill* the requested size before returning, which stalls interactive back-and-forth protocols like git's (small negotiation packets, not 64KB blobs). Use `.read1(size)` instead, which returns whatever's currently available without waiting to fill the buffer. This was caught by testing `GitServerSession` against a real `git-upload-pack` process and seeing zero bytes come back until this was fixed. Apply the same care (`read1`, or the `ready_callback`-driven pattern RNS's own `Buffer` example uses for the *receiving* side) to any future code that pipes a live/interactive stream — it's a "looks correct, silently stalls" trap, not a crash.
 
 The `git-remote-jcomprns` shim is invoked directly by git with its own stdin/stdout already committed to the remote-helper protocol, so it can't use the interactive `resolve_config_dir()` prompt (there's no room for a human prompt in that stream, and stdin is git's protocol channel, not a keyboard). It reads `JCOMPRNS_CONFIG`/`JCOMPRNS_IDENTITY` env vars instead, defaulting to the live config and shared identity.
+
+### Cross-platform OS integration
+
+`pyserial` and RNS itself are already fully cross-platform, so the core pairing/config/identity/messaging/file-transfer/git logic needs no OS branching at all. Only the handful of places that shell out to an OS-native tool need per-platform dispatch, and they all follow the same shape: branch on `platform.system()` (`"Darwin"` / `"Windows"` / `"Linux"`), one private `_thing_<os>()` implementation per branch, each wrapped so failures degrade to "couldn't do this automatically, here's what to run/check manually" rather than crashing:
+
+- `shared.notify()` — `osascript` (macOS) / a PowerShell WinRT toast script (Windows, no extra modules needed) / `notify-send` (Linux, part of `libnotify`). Untrusted content (message previews, peer names) is never interpolated into the macOS AppleScript or the Windows PowerShell script text — it's escaped (macOS) or passed as a bound script `param()` via a separate argv entry (Windows), since both are real script-injection surfaces when the content comes from the network.
+- `rnode_pair.py`'s `find_bonded_rnode_address()` — `system_profiler SPBluetoothDataType -json` (macOS, JSON) / PowerShell `Get-PnpDevice -Class Bluetooth` (Windows, MAC extracted from the `BTHLE\DEV_XXXXXXXXXXXX\...` instance ID via `_extract_mac_address()`) / `bluetoothctl devices Paired` (Linux, BlueZ). Same for `open_bluetooth_settings()` and the printed instructions (`bluetooth_settings_label()`).
+- macOS is the only platform this repo has actually been run on. The Windows/Linux branches are implemented against each OS's standard, documented tooling and covered by unit tests that mock `platform.system()`/`subprocess.run`/`shutil.which` and feed fabricated-but-realistic tool output (e.g. a sample `Get-PnpDevice` InstanceId line, a sample `bluetoothctl devices Paired` line) — this verifies the dispatch and parsing logic, but isn't the same as having run on real Windows/Linux hardware. Flag this honestly rather than claiming full verification if asked about platform support.
 
 ### Known upstream quirks (not bugs in this repo)
 

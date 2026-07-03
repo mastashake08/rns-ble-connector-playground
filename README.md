@@ -1,13 +1,13 @@
 # RNS BLE Connector Playground
 
-Pairs an [RNode](https://unsigned.io/rnode/) to this Mac over Bluetooth LE and wires it into [Reticulum (RNS)](https://reticulum.network/) as a `RNodeInterface`.
+Pairs an [RNode](https://unsigned.io/rnode/) to this machine over Bluetooth LE and wires it into [Reticulum (RNS)](https://reticulum.network/) as a `RNodeInterface`.
 
 ## Why this exists
 
-RNode's BLE firmware requires a bonded (secure) connection before any data can flow, and macOS only lets you create that bond through its own Bluetooth pairing UI — no app, including this one, can drive that dialog programmatically. What this script automates is everything *around* that manual step:
+RNode's BLE firmware requires a bonded (secure) connection before any data can flow, and the OS only lets you create that bond through its own Bluetooth pairing UI — no app, including this one, can drive that dialog programmatically. What this script automates is everything *around* that manual step:
 
 1. Talks to the RNode over USB serial (the same KISS commands `rnodeconf` uses) to switch on Bluetooth and put the device into pairing mode.
-2. Reads back the pairing PIN the firmware generates and opens System Settings > Bluetooth for you.
+2. Reads back the pairing PIN the firmware generates and opens your OS's Bluetooth settings for you.
 3. Once you've completed the bond, detects the RNode's Bluetooth address and adds a `[[RNode BLE Interface]]` block to your Reticulum config (`port = ble://<address>`).
 4. Creates a Reticulum identity (or reuses one you already have).
 5. Launches `rnsd` in the foreground.
@@ -15,6 +15,19 @@ RNode's BLE firmware requires a bonded (secure) connection before any data can f
 RNS handles the actual data link over BLE itself from there (via `bleak`) — this project only exists to get the one-time OS-level pairing and config wiring out of the way.
 
 Once a device has been paired, its address is remembered in `rnode_state.json`, so every run after the first skips straight to updating the config and launching `rnsd` — no re-pairing needed.
+
+## Platform support
+
+The core pairing flow (talking to the RNode over USB/KISS, RNS config, identity, `rnsd`) is fully cross-platform — it's all `pyserial`/RNS, which already work identically on macOS, Windows, and Linux. Two pieces are inherently OS-specific and are implemented per-platform:
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Open Bluetooth settings | `open x-apple.systempreferences:...` | `ms-settings:bluetooth` | first available of `gnome-control-center`, `blueman-manager`, `kcmshell5` |
+| Detect the bonded RNode's address | `system_profiler SPBluetoothDataType` | PowerShell `Get-PnpDevice -Class Bluetooth` | `bluetoothctl devices Paired` (BlueZ) |
+
+**macOS is the primary tested platform** (this project was built and verified there). The Windows and Linux paths are implemented against each OS's standard, documented tooling and covered by unit tests with fabricated realistic output, but haven't been run on real Windows/Linux hardware. If auto-detection fails on your platform, the script tells you what to run manually (or check `--address` to skip detection entirely once you know the address).
+
+Native OS notifications (used by `lxmf_messenger.py` and `file_transfer.py`) work the same way: `osascript` on macOS, a PowerShell WinRT toast on Windows (no extra modules needed), `notify-send` on Linux (part of `libnotify`, present on most desktop distros). If the relevant tool isn't available, notifications are silently skipped — nothing else in the app depends on them.
 
 ## Setup
 
@@ -76,7 +89,7 @@ It brings up Reticulum itself (attaching to `rnsd` if it's already running as th
 - **P** — open the presence directory: lists every LXMF peer seen announcing on the network, and lets you pick one to message directly
 - **Q** — quit
 
-Incoming messages trigger a terminal alert (with a bell) and a native macOS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
+Incoming messages trigger a terminal alert (with a bell) and a native OS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
 
 Flags: `--config`, `--identity` (same meaning as in `rnode_pair.py`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`), `--contacts <path>` (where the presence directory is saved; default `./contacts.json`), `--announce-interval <minutes>` (periodically re-announce yourself so others can discover you; default `0` = announce once at startup only).
 

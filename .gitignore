@@ -1,8 +1,6 @@
 .venv/
 .vscode/
 __pycache__/
-identity
-*.json
-configs/default/storage/
-configs/default/interfaces/
-received_files/
+*.egg-info/
+build/
+dist/

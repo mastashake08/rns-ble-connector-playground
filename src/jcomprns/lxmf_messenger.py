@@ -34,7 +34,7 @@ import RNS.vendor.umsgpack as msgpack
 import LXMF
 
 from .rnode_pair import create_or_load_identity, resolve_config_dir
-from .shared import notify, load_json, save_json, debug, set_verbose, DEFAULT_IDENTITY, DEFAULT_CONTACTS
+from .shared import notify, load_json, save_json, debug, set_verbose, DEFAULT_IDENTITY, DEFAULT_CONTACTS, DEFAULT_MESSAGES
 
 LXMF_DELIVERY_ASPECT = "lxmf.delivery"
 
@@ -56,7 +56,8 @@ def decode_display_name(app_data):
 
 class Messenger:
     def __init__(self, config_dir, identity_path, display_name, stamp_cost,
-                 contacts_path=DEFAULT_CONTACTS, announce_interval=0, verbose=False):
+                 contacts_path=DEFAULT_CONTACTS, messages_path=DEFAULT_MESSAGES,
+                 announce_interval=0, verbose=False):
         self.reticulum = RNS.Reticulum(str(Path(config_dir).expanduser()), loglevel=RNS.LOG_DEBUG if verbose else None)
         self.identity = create_or_load_identity(identity_path)
 
@@ -67,8 +68,11 @@ class Messenger:
             self.identity, display_name=display_name, stamp_cost=stamp_cost
         )
 
-        self.inbox = []
-        self.inbox_lock = threading.Lock()
+        # Chat history: plain dicts (not live LXMessage objects), so it can be
+        # persisted to disk and reloaded across restarts, same as contacts.
+        self.messages_path = Path(messages_path).expanduser()
+        self.messages = load_json(self.messages_path, [])
+        self.messages_lock = threading.Lock()
         self.notify_queue = queue.Queue()
 
         # Presence directory: every lxmf.delivery destination we see announced
@@ -99,9 +103,27 @@ class Messenger:
             self.announce_self()
 
     def _on_message(self, message):
-        with self.inbox_lock:
-            self.inbox.append(message)
+        self._record_message(
+            "received",
+            message.source_hash.hex(),
+            message.title_as_string() or "",
+            message.content_as_string() or "",
+            timestamp=message.timestamp,
+        )
         self.notify_queue.put(message)
+
+    def _record_message(self, direction, address, title, body, timestamp=None):
+        entry = {
+            "direction": direction,
+            "address": address,
+            "title": title,
+            "content": body,
+            "timestamp": timestamp if timestamp is not None else time.time(),
+        }
+        with self.messages_lock:
+            self.messages.append(entry)
+            save_json(self.messages_path, self.messages)
+        return entry
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         if destination_hash == self.destination.hash:
@@ -166,16 +188,10 @@ class Messenger:
             return
 
         dest = RNS.Destination(recipient_identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
-        self._deliver(dest, title, body)
-        print("Message sent.")
-
-    def reply(self, message, body):
-        self._deliver(message.source, "", body)
-        print("Reply sent.")
-
-    def _deliver(self, dest, title, body):
         lxm = LXMF.LXMessage(dest, self.destination, body, title, desired_method=LXMF.LXMessage.DIRECT, include_ticket=True)
         self.router.handle_outbound(lxm)
+        self._record_message("sent", dest_hash.hex(), title, body)
+        print("Message sent.")
 
 
 def compose(messenger, to_address=None, to_name=None):
@@ -197,27 +213,35 @@ def compose(messenger, to_address=None, to_name=None):
 
 
 def show_inbox(messenger):
-    with messenger.inbox_lock:
-        messages = list(messenger.inbox)
+    with messenger.messages_lock:
+        history = list(messenger.messages)
 
     print("\n--- Inbox ---")
-    if not messages:
+    if not history:
         print("(empty)")
         return
 
-    for i, m in enumerate(messages):
-        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(m.timestamp))
-        title = m.title_as_string() or "(no title)"
-        print(f"[{i}] {ts}  from {m.source_hash.hex()}")
-        print(f"     {title}: {m.content_as_string()}")
+    for i, entry in enumerate(history):
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry["timestamp"]))
+        arrow = "<-" if entry["direction"] == "received" else "->"
+        title = entry["title"] or "(no title)"
+        print(f"[{i}] {ts} {arrow} {entry['address']}")
+        print(f"     {title}: {entry['content']}")
 
     choice = input("Enter number to reply, or blank to go back: ").strip()
-    if choice.isdigit() and int(choice) in range(len(messages)):
-        body = input("Reply: ")
-        if body:
-            messenger.reply(messages[int(choice)], body)
-        else:
-            print("Cancelled.")
+    if not (choice.isdigit() and int(choice) in range(len(history))):
+        return
+
+    entry = history[int(choice)]
+    if entry["direction"] != "received":
+        print("That's a message you sent -- pick a received one to reply to.")
+        return
+
+    body = input("Reply: ")
+    if body:
+        messenger.send(entry["address"], "", body)
+    else:
+        print("Cancelled.")
 
 
 def show_presence(messenger):
@@ -284,6 +308,7 @@ def main():
     parser.add_argument("--display-name", default="ble-connector", help="Display name announced with your LXMF address")
     parser.add_argument("--stamp-cost", type=int, default=0, help="Proof-of-work stamp cost required from senders")
     parser.add_argument("--contacts", default=DEFAULT_CONTACTS, help="Where the presence directory is persisted")
+    parser.add_argument("--messages", default=DEFAULT_MESSAGES, help="Where chat history is persisted")
     parser.add_argument("--announce-interval", type=float, default=0,
                          help="Re-announce yourself every N minutes so others can discover you (0 = only announce once at startup)")
     args = parser.parse_args()
@@ -291,7 +316,8 @@ def main():
     args.config = resolve_config_dir(args.config)
 
     messenger = Messenger(args.config, args.identity, args.display_name, args.stamp_cost,
-                           contacts_path=args.contacts, announce_interval=args.announce_interval, verbose=args.verbose)
+                           contacts_path=args.contacts, messages_path=args.messages,
+                           announce_interval=args.announce_interval, verbose=args.verbose)
 
     try:
         run_keyboard_loop(messenger)

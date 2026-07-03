@@ -43,6 +43,7 @@ def app_data_dir():
 DEFAULT_IDENTITY = str(app_data_dir() / "identity")
 DEFAULT_STATE_FILE = str(app_data_dir() / "rnode_state.json")
 DEFAULT_CONTACTS = str(app_data_dir() / "contacts.json")
+DEFAULT_MESSAGES = str(app_data_dir() / "messages.json")
 DEFAULT_FILETRANSFER_CONTACTS = str(app_data_dir() / "filetransfer_contacts.json")
 DEFAULT_RECEIVED_DIR = str(app_data_dir() / "received_files")
 DEFAULT_MANIFEST = str(app_data_dir() / "received_files.json")

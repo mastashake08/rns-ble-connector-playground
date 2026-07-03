@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jcomprns"
-version = "0.1.1"
+version = "0.1.2"
 description = "Pair an RNode over Bluetooth LE and run LXMF messaging, file transfer, and git over Reticulum (RNS)."
 readme = "README.md"
 license = "MIT"

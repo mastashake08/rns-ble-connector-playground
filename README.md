@@ -93,6 +93,7 @@ Run `jcomprns-pair --help` for the full list.
 - `rnode_state.json` — remembers the paired RNode's BLE address between runs
 - `identity` — Reticulum identity file (keep this private; anyone with it can decrypt traffic for it), shared by all four tools so your address stays consistent
 - `contacts.json` — the presence directory of LXMF peers seen announcing on the network (created by `jcomprns-chat`)
+- `messages.json` — chat history, sent and received (created by `jcomprns-chat`)
 - `filetransfer_contacts.json` — the presence directory of file-transfer peers seen announcing on the network (created by `jcomprns-send`)
 - `received_files/` and `received_files.json` — incoming files and the manifest of what was received, when, and from where (created by `jcomprns-send`)
 - `configs/<name>/` — saved Reticulum config profiles (see "Config profiles" below)
@@ -109,13 +110,15 @@ jcomprns-chat
 It brings up Reticulum itself (attaching to `rnsd` if it's already running as the shared instance, or opening the configured interfaces directly if not), then drops into a single-keypress UI:
 
 - **M** — compose a message: paste a recipient's LXMF address (hex), optionally a title, and the message body
-- **I** — open the inbox: lists received messages and lets you pick one to reply to
+- **I** — open the inbox: lists your full chat history (sent and received, oldest first) and lets you pick a received message to reply to
 - **P** — open the presence directory: lists every LXMF peer seen announcing on the network, and lets you pick one to message directly
 - **Q** — quit
 
 Incoming messages trigger a terminal alert (with a bell) and a native OS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
 
-Flags: `--config`, `--identity` (same meaning as in `jcomprns-pair`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`), `--contacts <path>` (where the presence directory is saved; default `~/.jcomprns/contacts.json`), `--announce-interval <minutes>` (periodically re-announce yourself so others can discover you; default `0` = announce once at startup only).
+Chat history (both sent and received) is persisted to `messages.json` and reloaded on startup, so it survives restarts — same idea as the presence directory.
+
+Flags: `--config`, `--identity` (same meaning as in `jcomprns-pair`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`), `--contacts <path>` (where the presence directory is saved; default `~/.jcomprns/contacts.json`), `--messages <path>` (where chat history is saved; default `~/.jcomprns/messages.json`), `--announce-interval <minutes>` (periodically re-announce yourself so others can discover you; default `0` = announce once at startup only).
 
 ### Presence directory
 

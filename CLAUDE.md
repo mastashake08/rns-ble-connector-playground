@@ -72,6 +72,8 @@ Once bonded, the BLE MAC address is remembered in `~/.jcomprns/rnode_state.json`
 
 RNS/LXMF deliver messages, announces, and (for `file_transfer.py`) link/resource events from their own background transport thread, not the main thread. Callbacks registered with RNS/LXMF (`Messenger._on_message`, `Messenger.received_announce`, `FileTransferNode._on_incoming_link`, `_on_resource_started`, `_on_resource_concluded`, both classes' `received_announce`) all just push onto a `queue.Queue` and return immediately; the main thread's `drain_notifications()` — polled once per keyboard-loop tick — is what actually prints alerts and fires native OS notifications via `shared.notify()`. Any new code that reacts to incoming network events should follow this queue-and-drain pattern rather than doing work directly in the callback.
 
+The one thing callbacks *do* do directly (not deferred through the queue) is persist state to disk under a lock — `received_announce` updating `self.contacts`/`contacts.json`, and `_on_message` calling `_record_message()` to append to `self.messages`/`messages.json`. That's fine: it's a quick lock-protected dict/list mutation plus a `save_json()` write, not a UI side effect, so it doesn't need to wait for the main thread's poll tick. Only printing/notifying is deferred.
+
 The keyboard UI itself (`run_keyboard_loop`) uses `tty.setcbreak` + `select.select` on stdin to read single keypresses without waiting for Enter, temporarily restoring normal terminal mode (`termios.tcsetattr`) around any sub-flow that needs real `input()` (compose/send, inbox, presence).
 
 ### Presence directory (same pattern in both apps)
@@ -79,6 +81,10 @@ The keyboard UI itself (`run_keyboard_loop`) uses `tty.setcbreak` + `select.sele
 Both `Messenger` and `FileTransferNode` register themselves as an `RNS.Transport` announce handler with `aspect_filter` set to their own app's namespace (`"lxmf.delivery"` for messaging, `"jcomprns.filetransfer"` for file transfer), so each hears *any* peer's announce under that namespace on the network, not just peers who've contacted them first. This is the general mechanism for building any custom app/domain on Reticulum: a destination's discoverability comes from its `app_name`/aspect namespace, and any node can listen for announces under a namespace it doesn't otherwise participate in — the two apps' directories are independent because they're different namespaces, even when it's the same identity underneath.
 
 Display names are decoded from each announce's `app_data`. LXMF encodes it as `msgpack([display_name_bytes_or_None, stamp_cost, supported_functionality])` (matched against `LXMRouter.get_announce_app_data` in the installed `lxmf` package); `file_transfer.py` defines its own minimal `msgpack([display_name_bytes_or_None])` since it's a custom namespace with no existing encoding to match. Both decoders are wrapped in a broad `except Exception` since `app_data` is attacker-controlled network input. Results persist to `contacts.json` / `filetransfer_contacts.json` respectively.
+
+### `lxmf_messenger.py`'s chat history is plain dicts, not live `LXMessage` objects
+
+`Messenger.messages` (persisted to `messages.json`, loaded at startup like `contacts.json`) stores `{"direction": "sent"|"received", "address", "title", "content", "timestamp"}` dicts, not the raw `LXMF.LXMessage` objects `_on_message` receives. A live `LXMessage`'s useful reply target (`message.source`, a bound `RNS.Destination`) can't be serialized to JSON or reconstructed after a restart, so `_record_message()` immediately reduces it to plain data. This is also why there's no separate `reply()` method anymore: replying to a past-received entry from `show_inbox` just calls `messenger.send(entry["address"], ...)` — the same path-resolution/identity-recall flow used for a fresh compose — instead of reusing a live object's shortcut. In practice this costs nothing extra: `RNS.Transport.has_path()` is already true for anyone who's messaged you, so `send()` doesn't actually wait on a path request in that case.
 
 ### `file_transfer.py`'s use of Link + Resource
 
@@ -115,6 +121,6 @@ Because the RNS server doesn't know which repo/service a connecting client wants
 
 ## Files that are runtime state, not source
 
-Everything under `~/.jcomprns/` (`identity`, `rnode_state.json`, `contacts.json`, `filetransfer_contacts.json`, `received_files/`, `received_files.json`, `configs/*/storage/`, `configs/*/interfaces/`) is generated/mutated at runtime and lives outside the repo entirely — none of it is package source, and none of it should be committed. `~/.jcomprns/configs/<name>/config` is the one hand-editable file per profile, a plain Reticulum config file in the same format as `~/.reticulum/config`.
+Everything under `~/.jcomprns/` (`identity`, `rnode_state.json`, `contacts.json`, `messages.json`, `filetransfer_contacts.json`, `received_files/`, `received_files.json`, `configs/*/storage/`, `configs/*/interfaces/`) is generated/mutated at runtime and lives outside the repo entirely — none of it is package source, and none of it should be committed. `~/.jcomprns/configs/<name>/config` is the one hand-editable file per profile, a plain Reticulum config file in the same format as `~/.reticulum/config`.
 
 Build artifacts (`src/jcomprns.egg-info/`, `build/`, `dist/`) are also not source — regenerated by `pip install -e .` / `python3 -m build` respectively, and gitignored.

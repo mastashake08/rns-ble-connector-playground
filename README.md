@@ -44,7 +44,7 @@ Useful flags:
 | `--repair` | Ignore the saved address and pair a (different) device again |
 | `--address <mac>` | Use a specific BLE address directly, skipping pairing/detection |
 | `--no-run` | Update config + identity but don't launch `rnsd` |
-| `--config <dir>` | Reticulum config directory (default `~/.reticulum`) |
+| `--config <dir>` | Reticulum config directory; skips the startup config prompt if given |
 | `--identity <path>` | Identity file to create/reuse (default `./identity`) |
 | `--state-file <path>` | Where the paired address is remembered (default `./rnode_state.json`) |
 | `--frequency` / `--bandwidth` / `--txpower` / `--spreadingfactor` / `--codingrate` | LoRa radio parameters written into the interface block |
@@ -75,3 +75,21 @@ It brings up Reticulum itself (attaching to `rnsd` if it's already running as th
 Incoming messages trigger a terminal alert (with a bell) and a native macOS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
 
 Flags: `--config`, `--identity` (same meaning as in `rnode_pair.py`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`).
+
+## Config profiles (`configs/`)
+
+Both `rnode_pair.py` and `lxmf_messenger.py` prompt at startup:
+
+```
+Which Reticulum config do you want to use?
+  [0] Your live config (~/.reticulum)
+  [1] default  (configs/default)
+Choice [0]:
+```
+
+- **[0]** (or just pressing Enter) uses your live `~/.reticulum` config, same as before.
+- Any other number uses that saved profile directory under `configs/` as the Reticulum config directory for this run (its own `config` file, and its own `storage/`/identity cache, isolated from your live setup).
+
+Pass `--config <dir>` on the command line to skip the prompt entirely and use that directory directly (scripting/automation).
+
+To save a new profile, copy a working `config` file into `configs/<name>/config` — it'll show up in the list automatically. `configs/default/` is a snapshot of the live config at the time it was saved.

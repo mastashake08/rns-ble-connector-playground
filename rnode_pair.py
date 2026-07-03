@@ -44,6 +44,41 @@ BT_CTRL_PAIR = 0x02
 
 RNODE_PORT_HINTS = ("usbserial", "usbmodem", "SLAB", "CP210", "CH340", "CH9102", "wchusbserial")
 
+LIVE_CONFIG_DIR = "~/.reticulum"
+CONFIGS_DIR = Path(__file__).parent / "configs"
+
+
+def list_saved_configs(configs_dir=CONFIGS_DIR):
+    configs_dir = Path(configs_dir)
+    if not configs_dir.exists():
+        return []
+    return sorted(p.name for p in configs_dir.iterdir() if p.is_dir() and (p / "config").exists())
+
+
+def resolve_config_dir(explicit_config, configs_dir=CONFIGS_DIR):
+    """Return the RNS config directory to use, prompting the user to pick
+    between their live config and a saved one under configs/ if --config
+    wasn't given explicitly."""
+    if explicit_config:
+        return explicit_config
+
+    profiles = list_saved_configs(configs_dir)
+    if not profiles:
+        return LIVE_CONFIG_DIR
+
+    print("Which Reticulum config do you want to use?")
+    print(f"  [0] Your live config ({LIVE_CONFIG_DIR})")
+    for i, name in enumerate(profiles, start=1):
+        print(f"  [{i}] {name}  (configs/{name})")
+
+    choice = input("Choice [0]: ").strip()
+    if choice and choice.isdigit() and 1 <= int(choice) <= len(profiles):
+        return str(configs_dir / profiles[int(choice) - 1])
+
+    if choice and choice != "0":
+        print("Invalid choice, using your live config.")
+    return LIVE_CONFIG_DIR
+
 
 def find_rnode_port():
     ports = list(list_ports.comports())
@@ -339,7 +374,7 @@ def main():
     parser.add_argument("--repair", action="store_true", help="Ignore any saved pairing and run the USB pairing flow again")
     parser.add_argument("--address", help="RNode BLE MAC address, e.g. aa:bb:cc:dd:ee:ff (skips auto-detection)")
     parser.add_argument("--state-file", default=str(Path(__file__).parent / "rnode_state.json"), help="Where to remember the paired RNode's address")
-    parser.add_argument("--config", default="~/.reticulum", help="Path to the RNS config directory")
+    parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
     parser.add_argument("--identity", default=str(Path(__file__).parent / "identity"), help="Path to the RNS identity file to create/reuse")
     parser.add_argument("--frequency", type=int, default=915000000, help="LoRa frequency in Hz")
     parser.add_argument("--bandwidth", type=int, default=125000, help="LoRa bandwidth in Hz")
@@ -348,6 +383,7 @@ def main():
     parser.add_argument("--codingrate", type=int, default=5, help="LoRa coding rate")
     parser.add_argument("--no-run", action="store_true", help="Update config/identity but don't launch rnsd")
     args = parser.parse_args()
+    args.config = resolve_config_dir(args.config)
 
     address = args.address
     if not address and not args.repair:

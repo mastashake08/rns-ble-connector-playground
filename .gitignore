@@ -3,5 +3,5 @@
 __pycache__/
 identity
 identity.json
-configs/storage/
-configs/interfaces/
+configs/default/storage/
+configs/default/interfaces/

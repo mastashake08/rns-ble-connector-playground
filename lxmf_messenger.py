@@ -29,7 +29,7 @@ from pathlib import Path
 import RNS
 import LXMF
 
-from rnode_pair import create_or_load_identity
+from rnode_pair import create_or_load_identity, resolve_config_dir
 
 DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
 
@@ -190,11 +190,12 @@ def run_keyboard_loop(messenger):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", default="~/.reticulum", help="Path to the RNS config directory")
+    parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
     parser.add_argument("--identity", default=DEFAULT_IDENTITY, help="Path to the RNS identity file to create/reuse")
     parser.add_argument("--display-name", default="ble-connector", help="Display name announced with your LXMF address")
     parser.add_argument("--stamp-cost", type=int, default=0, help="Proof-of-work stamp cost required from senders")
     args = parser.parse_args()
+    args.config = resolve_config_dir(args.config)
 
     messenger = Messenger(args.config, args.identity, args.display_name, args.stamp_cost)
 

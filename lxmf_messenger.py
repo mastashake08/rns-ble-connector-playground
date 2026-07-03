@@ -13,7 +13,7 @@ tiny keyboard-driven UI:
   [P] Open the presence directory of peers seen announcing on the network
   [Q] Quit
 
-Incoming messages trigger a terminal alert and a native macOS notification.
+Incoming messages trigger a terminal alert and a native OS notification.
 Every LXMF peer that announces on the network (not just people who've
 messaged you) is recorded in the presence directory, so you can build up a
 contact list of who's reachable without needing to be sent their address.
@@ -34,7 +34,7 @@ import RNS.vendor.umsgpack as msgpack
 import LXMF
 
 from rnode_pair import create_or_load_identity, resolve_config_dir
-from shared import notify_macos, load_json, save_json
+from shared import notify, load_json, save_json
 
 DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
 DEFAULT_CONTACTS = str(Path(__file__).parent / "contacts.json")
@@ -132,7 +132,7 @@ class Messenger:
             preview = message.content_as_string() or ""
             print(f"\n\a\U0001F4E9 New message from {message.source_hash.hex()}: {preview[:80]}")
             print("Press [I] for inbox, [M] to compose, [Q] to quit.")
-            notify_macos("LXMF Message", f"From {message.source_hash.hex()[:16]}...", preview)
+            notify("LXMF Message", f"From {message.source_hash.hex()[:16]}...", preview)
 
         while True:
             try:

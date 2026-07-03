@@ -40,7 +40,7 @@ import RNS
 import RNS.vendor.umsgpack as msgpack
 
 from rnode_pair import create_or_load_identity, resolve_config_dir
-from shared import notify_macos, load_json, save_json, human_size
+from shared import notify, load_json, save_json, human_size
 
 DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
 DEFAULT_CONTACTS = str(Path(__file__).parent / "filetransfer_contacts.json")
@@ -189,7 +189,7 @@ class FileTransferNode:
             if kind == "received":
                 print(f"\n\a\U0001F4E6 File received: {payload['filename']} ({human_size(payload['size'])})")
                 print("Press [R] to view received files.")
-                notify_macos("File Received", payload["filename"], human_size(payload["size"]))
+                notify("File Received", payload["filename"], human_size(payload["size"]))
             else:
                 print(f"\n{payload}")
 

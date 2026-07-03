@@ -56,3 +56,22 @@ Run `python3 rnode_pair.py --help` for the full list.
 - `rnode_state.json` — remembers the paired RNode's BLE address between runs
 - `identity` — Reticulum identity file (keep this private; anyone with it can decrypt traffic for it)
 - `~/.reticulum/config` — gets a `[[RNode BLE Interface]]` block appended (existing interfaces are left untouched); a timestamped backup is made before every edit
+
+## Messaging (LXMF)
+
+`lxmf_messenger.py` is a small interactive [LXMF](https://github.com/markqvist/LXMF) messaging client that runs over the same Reticulum setup. It reuses the identity created by `rnode_pair.py`, so your LXMF address stays the same across both tools.
+
+```
+source .venv/bin/activate
+python3 lxmf_messenger.py
+```
+
+It brings up Reticulum itself (attaching to `rnsd` if it's already running as the shared instance, or opening the configured interfaces directly if not), then drops into a single-keypress UI:
+
+- **M** — compose a message: paste a recipient's LXMF address (hex), optionally a title, and the message body
+- **I** — open the inbox: lists received messages and lets you pick one to reply to
+- **Q** — quit
+
+Incoming messages trigger a terminal alert (with a bell) and a native macOS notification. Your own LXMF address is printed on startup — that's what you give other people so they can message you.
+
+Flags: `--config`, `--identity` (same meaning as in `rnode_pair.py`), `--display-name` (shown to peers when you announce), `--stamp-cost` (proof-of-work senders must pay you before delivery; default `0`).

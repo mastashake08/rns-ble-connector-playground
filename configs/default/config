@@ -123,12 +123,6 @@ discover_interfaces = Yes
   target_host = rns.radical.computer
   target_port = 4242
 
-[[Beleth RNS Hub]]
-  type = TCPClientInterface
-  enabled = yes
-  target_host = rns.beleth.net
-  target_port = 4242
-
 
 [[www.vanheusden.com]]
   type = TCPClientInterface

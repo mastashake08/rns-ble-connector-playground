@@ -60,8 +60,15 @@ def find_rnode_port():
     print("Multiple serial ports found, please choose the RNode:")
     for i, p in enumerate(candidates):
         print(f"  [{i}] {p.device}  ({p.description})")
-    choice = input("Port number: ").strip()
-    return candidates[int(choice)].device
+    print("  [s] Skip -- continue without pairing")
+
+    while True:
+        choice = input("Port number: ").strip().lower()
+        if choice in ("s", "skip"):
+            return None
+        if choice.isdigit() and int(choice) in range(len(candidates)):
+            return candidates[int(choice)].device
+        print(f"Enter a number from 0-{len(candidates) - 1}, or 's' to skip.")
 
 
 def send_kiss_command(ser, command, payload_byte):
@@ -162,7 +169,7 @@ def find_bonded_rnode_address():
 def pair_rnode(args):
     port = args.port or find_rnode_port()
     if not port:
-        print("No serial port found -- plug in the RNode over USB to pair it, or pass --port explicitly.")
+        print("No serial port selected -- plug in the RNode over USB to pair it, or pass --port explicitly.")
         print("Continuing without pairing.")
         return None
 

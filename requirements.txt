@@ -1,1 +1,4 @@
 pyserial
+rns
+bleak
+lxmf

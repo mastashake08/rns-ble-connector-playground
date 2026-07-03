@@ -37,13 +37,13 @@ from pathlib import Path
 
 import RNS
 
-from rnode_pair import create_or_load_identity, resolve_config_dir
+from .rnode_pair import create_or_load_identity, resolve_config_dir
+from .shared import DEFAULT_IDENTITY, debug, set_verbose
 
 APP_NAME = "jcomprns"
 ASPECT = "git"
 URL_SCHEME = "jcomprns"
 
-DEFAULT_IDENTITY = str(Path(__file__).parent / "identity")
 LINK_TIMEOUT = 15.0
 PATH_TIMEOUT = 15.0
 GIT_SERVICES = ("upload-pack", "receive-pack")
@@ -106,8 +106,8 @@ class GitServerSession:
                 try:
                     self.proc.stdin.write(data)
                     self.proc.stdin.flush()
-                except (BrokenPipeError, OSError):
-                    pass
+                except (BrokenPipeError, OSError) as e:
+                    debug(f"GitServerSession: write to git subprocess stdin failed: {e}")
 
     def _start_process(self, header_line):
         parts = header_line.strip().split(" ", 1)
@@ -133,8 +133,8 @@ class GitServerSession:
     def _fail(self):
         try:
             self.buffer.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug(f"GitServerSession: closing buffer after failure raised: {e}")
 
     def _pump_stdout(self):
         try:
@@ -144,8 +144,8 @@ class GitServerSession:
                     break
                 self.buffer.write(chunk)
                 self.buffer.flush()
-        except (BrokenPipeError, OSError, ValueError):
-            pass
+        except (BrokenPipeError, OSError, ValueError) as e:
+            debug(f"GitServerSession: pumping git subprocess stdout failed: {e}")
         finally:
             returncode = self.proc.wait()
             RNS.log(f"git process exited with status {returncode}")
@@ -157,8 +157,8 @@ class GitServerSession:
 
 
 class GitServer:
-    def __init__(self, config_dir, identity_path, repos_dir, announce_interval=0):
-        self.reticulum = RNS.Reticulum(str(Path(config_dir).expanduser()))
+    def __init__(self, config_dir, identity_path, repos_dir, announce_interval=0, verbose=False):
+        self.reticulum = RNS.Reticulum(str(Path(config_dir).expanduser()), loglevel=RNS.LOG_DEBUG if verbose else None)
         self.identity = create_or_load_identity(identity_path)
         self.repos_dir = Path(repos_dir).expanduser().resolve()
 
@@ -197,7 +197,7 @@ def serve(args):
         print(f"No such directory: {repos_dir}")
         sys.exit(1)
 
-    server = GitServer(config_dir, args.identity, repos_dir, announce_interval=args.announce_interval)
+    server = GitServer(config_dir, args.identity, repos_dir, announce_interval=args.announce_interval, verbose=args.verbose)
     print(f"Serving git repositories from {repos_dir}")
     print(f"Your jcomprns git address: {server.address}")
     print(f"Share this with clients as: git clone {URL_SCHEME}://{server.address}/<reponame>")
@@ -226,11 +226,11 @@ def parse_url(url):
     return address_hex, reponame
 
 
-def _establish(config_dir, identity_path, address_hex):
+def _establish(config_dir, identity_path, address_hex, verbose=False):
     """Bring up Reticulum and establish a link to a jcomprns git server.
     Returns the link on success, or None on failure (with a message
     already written to stderr)."""
-    RNS.Reticulum(str(Path(config_dir).expanduser()))
+    RNS.Reticulum(str(Path(config_dir).expanduser()), loglevel=RNS.LOG_DEBUG if verbose else None)
     create_or_load_identity(identity_path)
 
     try:
@@ -296,13 +296,13 @@ def relay(link, service, reponame, stdin_raw, stdout_raw):
                     break
                 buffer.write(chunk)
                 buffer.flush()
-        except (BrokenPipeError, OSError, ValueError):
-            pass
+        except (BrokenPipeError, OSError, ValueError) as e:
+            debug(f"relay(): pumping stdin to buffer failed: {e}")
         finally:
             try:
                 buffer.close()
-            except Exception:
-                pass
+            except Exception as e:
+                debug(f"relay(): closing buffer failed: {e}")
             stdin_done.set()
 
     threading.Thread(target=pump_stdin, daemon=True).start()
@@ -332,6 +332,8 @@ def remote_helper_main():
 
     config_dir = os.environ.get("JCOMPRNS_CONFIG", "~/.reticulum")
     identity_path = os.environ.get("JCOMPRNS_IDENTITY", DEFAULT_IDENTITY)
+    verbose = os.environ.get("JCOMPRNS_VERBOSE", "") not in ("", "0")
+    set_verbose(verbose)
 
     stdin_raw = sys.stdin.buffer
     stdout_raw = sys.stdout.buffer
@@ -347,7 +349,7 @@ def remote_helper_main():
             stdout_raw.flush()
         elif command.startswith("connect "):
             service = command[len("connect "):].strip()
-            link = _establish(config_dir, identity_path, address_hex)
+            link = _establish(config_dir, identity_path, address_hex, verbose=verbose)
             if not link:
                 return  # No ack sent -- git will report the helper failed to connect.
             stdout_raw.write(b"\n")
@@ -366,6 +368,8 @@ def main():
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     serve_parser = subparsers.add_parser("serve", help="Serve git repositories over Reticulum")
+    serve_parser.add_argument("-v", "--verbose", action="store_true",
+                               help="Show diagnostic detail for errors that are normally handled silently, and run RNS at debug log level")
     serve_parser.add_argument("--repos-dir", required=True, help="Directory containing bare repositories to serve")
     serve_parser.add_argument("--config", default=None, help="Path to the RNS config directory (skips the startup config prompt if given)")
     serve_parser.add_argument("--identity", default=DEFAULT_IDENTITY, help="Path to the RNS identity file to create/reuse")
@@ -374,6 +378,7 @@ def main():
 
     args = parser.parse_args()
     if args.mode == "serve":
+        set_verbose(args.verbose)
         serve(args)
 
 

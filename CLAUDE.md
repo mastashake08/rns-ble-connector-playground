@@ -6,58 +6,65 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Each distinct capability in this repo (pairing, messaging, file transfer, git, ...) is its own standalone module/script, not a mode bolted onto an existing one. When asked to add new functionality:
 
-1. Create a new Python module for it (following the existing scripts' shape: reuse `create_or_load_identity`/`resolve_config_dir` from `rnode_pair.py`, reuse `shared.py`'s helpers rather than re-implementing them, verify any new RNS/LXMF API calls against the installed package source or official `Examples/` rather than guessing).
-2. Update `README.md` with a new section for it (what it does, how to run it, its flags, any files it creates).
-3. Update this file (`CLAUDE.md`) if the new module introduces an architectural pattern, a shared convention, or a non-obvious gotcha that future work in this repo should know about — not just a one-line mention.
+1. Create a new module under `src/jcomprns/` for it (following the existing modules' shape: reuse `create_or_load_identity`/`resolve_config_dir` from `rnode_pair.py`, default any new state path to something under `shared.app_data_dir()` — never `Path(__file__).parent`, reuse `shared.py`'s other helpers rather than re-implementing them, verify any new RNS/LXMF API calls against the installed package source or official `Examples/` rather than guessing).
+2. If it should be runnable as its own command, add a `[project.scripts]` entry in `pyproject.toml` (`jcomprns-<name> = "jcomprns.<module>:main"`), then `pip install -e .` again and confirm `jcomprns-<name> --help` actually resolves — a missing/typo'd entry point fails silently until someone runs the command.
+3. Update `README.md` with a new section for it (what it does, how to run it, its flags, any files it creates).
+4. Update this file (`CLAUDE.md`) if the new module introduces an architectural pattern, a shared convention, or a non-obvious gotcha that future work in this repo should know about — not just a one-line mention.
 
 Don't skip the README/CLAUDE.md updates to the end "if there's time" — do them as part of the same change.
 
 ## What this repo is
 
-Standalone Python scripts (no package/build system, cross-platform: macOS/Windows/Linux — see "Cross-platform OS integration" below) that get a Reticulum ([RNS](https://reticulum.network/)) node running with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging, file transfer, and git clients on top:
+A real pip package (`pyproject.toml`, setuptools, `src/` layout) named `jcomprns` that gets a Reticulum ([RNS](https://reticulum.network/)) node running with an [RNode](https://unsigned.io/rnode/) connected over Bluetooth LE, plus messaging, file transfer, and git clients on top. Cross-platform: macOS/Windows/Linux — see "Cross-platform OS integration" below.
 
-- `rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by every other script here
-- `lxmf_messenger.py` — interactive [LXMF](https://github.com/markqvist/LXMF) messaging client
-- `file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `jcomprns.filetransfer` destination namespace instead of LXMF
-- `rns_git.py` — serves git repositories over Reticulum (`serve` subcommand) and provides the connect/relay logic used by the `git-remote-jcomprns` helper, under the `jcomprns.git` destination namespace
-- `git-remote-jcomprns` — thin executable shim (no `.py` extension; this is the literal name git looks for on `PATH` for a `jcomprns://` remote) that hands off to `rns_git.py`'s `remote_helper_main()`
-- `shared.py` — small helpers (`notify`, `load_json`/`save_json`, `human_size`) used by the interactive clients; not a script, has no `main()`
+- `src/jcomprns/rnode_pair.py` — pairs an RNode over BLE and wires it into an RNS config; also a shared module (`create_or_load_identity`, `resolve_config_dir`) imported by every other module here → console script `jcomprns-pair`
+- `src/jcomprns/lxmf_messenger.py` — interactive [LXMF](https://github.com/markqvist/LXMF) messaging client → `jcomprns-chat`
+- `src/jcomprns/file_transfer.py` — interactive file transfer client, same shape as the messenger but using `RNS.Link`/`RNS.Resource` under its own `jcomprns.filetransfer` destination namespace instead of LXMF → `jcomprns-send`
+- `src/jcomprns/rns_git.py` — serves git repositories over Reticulum (`serve` subcommand) and provides the connect/relay logic used by the git remote helper, under the `jcomprns.git` destination namespace → `jcomprns-git`, plus `remote_helper_main()` → `git-remote-jcomprns`
+- `src/jcomprns/shared.py` — `app_data_dir()` (the single source of truth for where all default state lives — see below) plus small helpers (`notify`, `load_json`/`save_json`, `human_size`); not a script, has no `main()`
+
+All five commands are declared as `[project.scripts]` entries in `pyproject.toml` — that's the *only* place command names are defined; there is no longer a hand-written shim file for `git-remote-jcomprns` (there used to be, before this was packaged — setuptools now generates that executable directly from `rns_git:remote_helper_main`).
 
 ## Commands
 
 ```
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
-Inside the venv, use `python3 -m pip install <pkg>` rather than a bare `pip install` — on this machine `pip` is shell-aliased to a system pip3 that bypasses the venv, so `python3 -m pip` is the reliable way to actually install into `.venv`.
+Inside the venv, use `python3 -m pip install <pkg>` rather than a bare `pip install` — on this machine `pip` is shell-aliased to a system pip3 that bypasses the venv, so `python3 -m pip` is the reliable way to actually install into `.venv`. `pip install -e .` reads dependencies from `pyproject.toml` (not a `requirements.txt` — that file was removed when this was packaged, to keep one source of truth for dependencies).
 
-Run the entry points directly:
+Run the installed commands directly — no `python3 <file>.py`, they're real entries on `PATH`:
 ```
-python3 rnode_pair.py        # pair a new RNode, or re-run to just update config + launch rnsd
-python3 lxmf_messenger.py    # interactive messaging client (M compose, I inbox, P presence, Q quit)
-python3 file_transfer.py     # interactive file transfer client (S send, R received files, P presence, Q quit)
-python3 rns_git.py serve --repos-dir <dir>   # serve bare git repos over Reticulum
-git clone jcomprns://<hex-address>/<reponame>   # once git-remote-jcomprns is on PATH
+jcomprns-pair                                 # pair a new RNode, or re-run to just update config + launch rnsd
+jcomprns-chat                                 # interactive messaging client (M compose, I inbox, P presence, Q quit)
+jcomprns-send                                 # interactive file transfer client (S send, R received files, P presence, Q quit)
+jcomprns-git serve --repos-dir <dir>          # serve bare git repos over Reticulum
+git clone jcomprns://<hex-address>/<reponame> # git-remote-jcomprns is already on PATH once the package is installed
 ```
 
-There is no lint config, build step, or automated test suite. Verification is done by:
-- `python3 -m py_compile <file>.py` for a syntax check
-- ad hoc runs against a scratch config directory (pass `--config`/`--identity`/`--contacts`/`--state-file` pointing at a temp dir instead of the real `~/.reticulum` or repo state) with `unittest.mock.patch` used to script `input()` prompts and `serial.tools.list_ports.comports()` — this is necessary because real behavior involves live BLE/USB hardware and an interactive TTY that can't be part of an automated suite
+There is no lint config, build step beyond `pip install -e .`, or automated test suite. Verification is done by:
+- `python3 -m py_compile src/jcomprns/*.py` for a syntax check
+- ad hoc runs against a scratch config directory (pass `--config`/`--identity`/`--contacts`/`--state-file` pointing at a temp dir instead of the real `~/.reticulum` or `~/.jcomprns`) with `unittest.mock.patch` used to script `input()` prompts and `serial.tools.list_ports.comports()` — this is necessary because real behavior involves live BLE/USB hardware and an interactive TTY that can't be part of an automated suite
 - for `rns_git.py`, driving `GitServerSession` directly against a real local bare repo and a fake buffer object (`.read`/`.write`/`.flush`/`.close`) that stands in for the RNS `Buffer`, feeding it real pkt-line requests and asserting against real `git-upload-pack`/`git-receive-pack` output — this exercises all of the module's own logic (header parsing, path resolution/security, subprocess piping) without needing a live two-peer RNS link
+- after any change to `pyproject.toml` or module layout, reinstall (`pip install -e .`) and confirm all five console scripts (`jcomprns-pair --help`, `jcomprns-chat --help`, `jcomprns-send --help`, `jcomprns-git serve --help`, `which git-remote-jcomprns`) still resolve and run — entry-point wiring breaks silently otherwise (import errors only surface when someone actually runs the command)
 
 ## Architecture
 
+### App data lives in `~/.jcomprns/`, independent of where pip installs the package
+
+`shared.py`'s `app_data_dir()` (`~/.jcomprns`, created on first import if missing) is the single source of truth for every default state path: `DEFAULT_IDENTITY`, `DEFAULT_STATE_FILE`, `DEFAULT_CONTACTS`, `DEFAULT_FILETRANSFER_CONTACTS`, `DEFAULT_RECEIVED_DIR`, `DEFAULT_MANIFEST`, `CONFIGS_DIR` are all defined once there and imported by whichever module needs them. **Do not** default a new state path to `Path(__file__).parent` — that pattern was used before this was packaged (when the scripts lived flat in the repo and state sat right next to them), and would silently break once pip-installed, since `__file__` then points into `site-packages` (potentially read-only, and not a sensible place for runtime state regardless). Add any new default path to `shared.py` next to the existing ones instead.
+
 ### Config resolution is shared and dual-mode
 
-`rnode_pair.py`, `lxmf_messenger.py`, `file_transfer.py`, and `rns_git.py serve` all call `resolve_config_dir()` (defined in `rnode_pair.py`) before doing anything else. If `--config` isn't passed explicitly, it interactively prompts to choose between the user's live `~/.reticulum` config and any saved profile directory under `configs/<name>/` (detected by `list_saved_configs()` — any subdirectory of `configs/` containing a `config` file). Picking a profile uses that directory as a fully isolated RNS config dir (own `storage/`, own interface state) rather than touching the live one. Passing `--config` explicitly skips the prompt. This same function is imported rather than duplicated. The one exception is the `git-remote-jcomprns` client helper, which git invokes directly with its stdin/stdout already committed to a wire protocol — see the git section below for why it uses env vars instead.
+`jcomprns-pair`, `jcomprns-chat`, `jcomprns-send`, and `jcomprns-git serve` all call `resolve_config_dir()` (defined in `rnode_pair.py`) before doing anything else. If `--config` isn't passed explicitly, it interactively prompts to choose between the user's live `~/.reticulum` config and any saved profile directory under `shared.CONFIGS_DIR` (`~/.jcomprns/configs/<name>/`, detected by `list_saved_configs()` — any subdirectory containing a `config` file). Picking a profile uses that directory as a fully isolated RNS config dir (own `storage/`, own interface state) rather than touching the live one. Passing `--config` explicitly skips the prompt. This same function is imported rather than duplicated. The one exception is the `git-remote-jcomprns` client helper, which git invokes directly with its stdin/stdout already committed to a wire protocol — see the git section below for why it uses env vars instead.
 
 ### Why `rnode_pair.py` talks raw KISS over serial
 
 RNode's BLE stack requires OS-level Bluetooth bonding before any data can flow, and every OS only exposes that pairing dialog through its own native Bluetooth settings UI — no library can drive it programmatically, on any platform. What *can* be automated is talking to the RNode over USB serial using the same KISS commands `rnodeconf` uses (`CMD_BT_CTRL` to enable Bluetooth / enter pairing mode, `CMD_BT_PIN` to read back the generated pairing PIN), then walking the user through completing the bond manually. The KISS framing constants (`FEND`/`FESC`/`TFEND`/`TFESC`) and command bytes are hand-rolled in this file, verified against RNS's own `rnodeconf.py` source rather than guessed.
 
-Once bonded, the BLE MAC address is remembered in `rnode_state.json` so later runs skip straight to updating the config and launching `rnsd` — no USB reconnection needed. `pair_rnode()` and serial open failures are non-fatal by design: if no device/port is found, the script logs it and continues on to config + identity + launch rather than exiting, since the user may only want to (re)launch against an already-paired device or an already-correct config.
+Once bonded, the BLE MAC address is remembered in `~/.jcomprns/rnode_state.json` so later runs skip straight to updating the config and launching `rnsd` — no USB reconnection needed. `pair_rnode()` and serial open failures are non-fatal by design: if no device/port is found, the script logs it and continues on to config + identity + launch rather than exiting, since the user may only want to (re)launch against an already-paired device or an already-correct config.
 
 `rnode_pair.py` launches `rnsd` via `os.execv` (process replacement, not a subprocess) so that Ctrl+C and log streaming behave exactly like running `rnsd` directly. Because RNS config typically has `share_instance = Yes`, this `rnsd` and any separately-run `lxmf_messenger.py` / `file_transfer.py` (which call `RNS.Reticulum()` in-process) transparently share one instance — whichever starts first opens the actual interfaces, and the others attach as clients. Note `RNS.Reticulum` is a hard per-process singleton (a second `RNS.Reticulum()` call in the same process raises `OSError`) — this is why the two interactive clients can't both run in one process, and why a live two-peer test needs two real processes/machines rather than one test script.
 
@@ -85,7 +92,7 @@ Because the RNS server doesn't know which repo/service a connecting client wants
 
 **Gotcha that cost a debugging round when this was written**: piping a subprocess's `stdout` (or `stdin_raw`) with `.read(65536)` looks right but isn't — `io.BufferedReader.read(size)` blocks trying to *fill* the requested size before returning, which stalls interactive back-and-forth protocols like git's (small negotiation packets, not 64KB blobs). Use `.read1(size)` instead, which returns whatever's currently available without waiting to fill the buffer. This was caught by testing `GitServerSession` against a real `git-upload-pack` process and seeing zero bytes come back until this was fixed. Apply the same care (`read1`, or the `ready_callback`-driven pattern RNS's own `Buffer` example uses for the *receiving* side) to any future code that pipes a live/interactive stream — it's a "looks correct, silently stalls" trap, not a crash.
 
-The `git-remote-jcomprns` shim is invoked directly by git with its own stdin/stdout already committed to the remote-helper protocol, so it can't use the interactive `resolve_config_dir()` prompt (there's no room for a human prompt in that stream, and stdin is git's protocol channel, not a keyboard). It reads `JCOMPRNS_CONFIG`/`JCOMPRNS_IDENTITY` env vars instead, defaulting to the live config and shared identity.
+`git-remote-jcomprns` (the console script generated from `remote_helper_main()`) is invoked directly by git with its own stdin/stdout already committed to the remote-helper protocol, so it can't use the interactive `resolve_config_dir()` prompt (there's no room for a human prompt in that stream, and stdin is git's protocol channel, not a keyboard). It reads `JCOMPRNS_CONFIG`/`JCOMPRNS_IDENTITY` env vars instead, defaulting to the live `~/.reticulum` config and the shared `~/.jcomprns/identity`.
 
 ### Cross-platform OS integration
 
@@ -95,6 +102,12 @@ The `git-remote-jcomprns` shim is invoked directly by git with its own stdin/std
 - `rnode_pair.py`'s `find_bonded_rnode_address()` — `system_profiler SPBluetoothDataType -json` (macOS, JSON) / PowerShell `Get-PnpDevice -Class Bluetooth` (Windows, MAC extracted from the `BTHLE\DEV_XXXXXXXXXXXX\...` instance ID via `_extract_mac_address()`) / `bluetoothctl devices Paired` (Linux, BlueZ). Same for `open_bluetooth_settings()` and the printed instructions (`bluetooth_settings_label()`).
 - macOS is the only platform this repo has actually been run on. The Windows/Linux branches are implemented against each OS's standard, documented tooling and covered by unit tests that mock `platform.system()`/`subprocess.run`/`shutil.which` and feed fabricated-but-realistic tool output (e.g. a sample `Get-PnpDevice` InstanceId line, a sample `bluetoothctl devices Paired` line) — this verifies the dispatch and parsing logic, but isn't the same as having run on real Windows/Linux hardware. Flag this honestly rather than claiming full verification if asked about platform support.
 
+### Verbose/debug flag (`shared.debug()` / `shared.set_verbose()`)
+
+`shared.py` holds a module-level `_verbose` flag. Every module's `main()` adds `-v`/`--verbose`, calls `set_verbose(args.verbose)` first thing, and passes `verbose=` through to wherever it constructs `RNS.Reticulum(...)` (as `loglevel=RNS.LOG_DEBUG if verbose else None` — `None` leaves the config file's own `loglevel` in effect, verified this actually raises `RNS.loglevel` at runtime, not just cosmetic). `git-remote-jcomprns` has no argv of its own (git owns it), so it reads `JCOMPRNS_VERBOSE` instead, following the same pattern as its existing `JCOMPRNS_CONFIG`/`JCOMPRNS_IDENTITY` env vars.
+
+`debug(message)` prints to stderr only when verbose is on, and is the standard thing to call at any `except` block that's intentionally silent (a best-effort notifier failing, a corrupt JSON file falling back to a default, unparseable network-supplied announce data) — never change the *behavior* in these branches, just add the `debug()` call before the existing `pass`/`return`. Don't add `debug()` calls on routine, expected control flow (e.g. `resolve_repo_path`'s per-candidate `except ValueError: continue` in `rns_git.py`, or anywhere that already prints a clear user-facing message unconditionally) — that would just be noise, not diagnostic value.
+
 ### Known upstream quirks (not bugs in this repo)
 
 - RNS's `BackboneInterface` uses Linux/Android-only `epoll` and always fails on macOS with `module 'select' has no attribute 'epoll'`. Use `type = TCPClientInterface` instead in any config meant to run here.
@@ -102,4 +115,6 @@ The `git-remote-jcomprns` shim is invoked directly by git with its own stdin/std
 
 ## Files that are runtime state, not source
 
-`identity`, `rnode_state.json`, `contacts.json`, `filetransfer_contacts.json`, `received_files/`, `received_files.json`, and everything under `configs/*/storage/` and `configs/*/interfaces/` are generated/mutated at runtime, not hand-edited. `configs/<name>/config` is the one hand-editable file per profile — it's a plain Reticulum config file, same format as `~/.reticulum/config`.
+Everything under `~/.jcomprns/` (`identity`, `rnode_state.json`, `contacts.json`, `filetransfer_contacts.json`, `received_files/`, `received_files.json`, `configs/*/storage/`, `configs/*/interfaces/`) is generated/mutated at runtime and lives outside the repo entirely — none of it is package source, and none of it should be committed. `~/.jcomprns/configs/<name>/config` is the one hand-editable file per profile, a plain Reticulum config file in the same format as `~/.reticulum/config`.
+
+Build artifacts (`src/jcomprns.egg-info/`, `build/`, `dist/`) are also not source — regenerated by `pip install -e .` / `python3 -m build` respectively, and gitignored.
